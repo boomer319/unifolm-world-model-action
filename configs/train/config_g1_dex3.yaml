@@ -315,9 +315,14 @@ lightning:
         out_dir: /docker_data/runs
         config: /workspace/configs/train/config_g1_dex3.yaml
         data_dir: /data_wma
-        # absolute interpolation: a bare ${...} inside a nested node is
-        # resolved relative to that node, not to the config root
-        base_ckpt: ${$.model.pretrained_checkpoint}
+        # Left empty on purpose: the run may load a different checkpoint than
+        # model.pretrained_checkpoint (wma-verify-dual overrides it on the
+        # command line), and OmegaConf 2.3 supports neither a relative
+        # ${model...} from a nested node nor the absolute ${$.model...} form.
+        # WMA_BASE_CKPT in the environment takes precedence; otherwise the
+        # recorder falls back to reading model.pretrained_checkpoint from the
+        # saved config next to the run.
+        base_ckpt: ""
         dataset_name: g1_dex3_graspsquare_1ep
     model_checkpoint:
       target: pytorch_lightning.callbacks.ModelCheckpoint

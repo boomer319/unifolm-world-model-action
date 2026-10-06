@@ -162,6 +162,11 @@ services:
   # only), so the stock loader loads it with strict=False and no shape error.
   # Dual matches the code exactly but needs prepare_ckpt.py first, because
   # upstream load_checkpoints raises on the 68 DoF-shaped tensors.
+  #
+  # WMA_BASE_CKPT tells the RunRecorder which checkpoint actually seeded the run
+  # (it cannot be interpolated from the YAML: OmegaConf 2.3 supports neither a
+  # relative nor an absolute form from inside a nested node). Pass it as
+  #   docker compose run --rm -e WMA_BASE_CKPT=<path> <service>
   wma-verify-dual:
     <<: *wma-base
     command: >

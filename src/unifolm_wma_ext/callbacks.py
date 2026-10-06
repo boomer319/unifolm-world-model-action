@@ -74,6 +74,32 @@ class RunRecorder(pl.Callback):
         self._t0 = None
 
     # ------------------------------------------------------------------ setup
+    def _base_ckpt(self, trainer):
+        """Which checkpoint seeded this run.
+
+        WMA_BASE_CKPT wins because a run may override
+        model.pretrained_checkpoint on the command line (wma-verify-dual does);
+        otherwise fall back to the config value, then to the model.yaml that
+        init_workspace saved next to the run.
+        """
+        env = os.environ.get("WMA_BASE_CKPT")
+        if env:
+            return env
+        if self.base_ckpt:
+            return self.base_ckpt
+        cfgdir = getattr(trainer, "logdir", "")
+        for cand in (os.path.join(os.path.dirname(str(cfgdir)), "configs", "model.yaml"),):
+            if cand and os.path.exists(cand):
+                try:
+                    import yaml
+                    with open(cand) as f:
+                        v = (yaml.safe_load(f) or {}).get("pretrained_checkpoint")
+                    if v:
+                        return v
+                except Exception:
+                    pass
+        return None
+
     def _resolve(self, trainer):
         """Work out a unique, human-meaningful directory for this run.
 
@@ -118,12 +144,14 @@ class RunRecorder(pl.Callback):
                 os.path.exists(self.config) else None,
             },
             "base_checkpoint": {
-                "path": self.base_ckpt,
+                "path": self._base_ckpt(trainer),
                 "exists": bool(self.base_ckpt and os.path.exists(self.base_ckpt)),
-                "sha256_first_1MiB": _sha256(self.base_ckpt, 1 << 20)
-                if self.base_ckpt and os.path.exists(self.base_ckpt) else None,
-                "size_bytes": os.path.getsize(self.base_ckpt)
-                if self.base_ckpt and os.path.exists(self.base_ckpt) else None,
+                "sha256_first_1MiB": _sha256(self._base_ckpt(trainer), 1 << 20)
+                if self._base_ckpt(trainer) and
+                os.path.exists(self._base_ckpt(trainer)) else None,
+                "size_bytes": os.path.getsize(self._base_ckpt(trainer))
+                if self._base_ckpt(trainer) and
+                os.path.exists(self._base_ckpt(trainer)) else None,
             },
             "dataset": {"name": self.dataset_name, "data_dir": self.data_dir},
             "model": {
