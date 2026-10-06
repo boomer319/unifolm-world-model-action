@@ -315,7 +315,9 @@ lightning:
         out_dir: /docker_data/runs
         config: /workspace/configs/train/config_g1_dex3.yaml
         data_dir: /data_wma
-        base_ckpt: ${model.pretrained_checkpoint}
+        # absolute interpolation: a bare ${...} inside a nested node is
+        # resolved relative to that node, not to the config root
+        base_ckpt: ${$.model.pretrained_checkpoint}
         dataset_name: g1_dex3_graspsquare_1ep
     model_checkpoint:
       target: pytorch_lightning.callbacks.ModelCheckpoint
