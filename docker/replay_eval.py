@@ -198,7 +198,13 @@ def main():
 
         def _wm_forward_tf(x, *args, **kw):
             if _TFZ.get("z") is not None:
-                ts = kwargs.get("timesteps", args[2] if len(args) > 2 else None)
+                # WMAModel.forward is (x, x_action, x_state, timesteps, ...);
+                # the sampler passes timesteps positionally, but accept the
+                # keyword form too rather than assume.
+                ts = args[2] if len(args) > 2 else kw.get("timesteps")
+                if ts is None:
+                    raise RuntimeError("teacher forcing could not find the "
+                                       "timestep argument")
                 z0 = _TFZ["z"]
                 if z0.shape[-3] != x.shape[-3]:
                     z0 = torch.nn.functional.interpolate(
