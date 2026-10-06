@@ -57,6 +57,11 @@ def parse_args():
     p.add_argument("--width", type=int, default=512)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--out", required=True)
+    p.add_argument("--dump-video", action="store_true",
+                   help="write the world's generated video per anchor as mp4")
+    p.add_argument("--frame-stride", type=int, default=2,
+                   help="source-frame stride between generated frames, matching "
+                        "the dataset's sampling so video metrics align")
     return p.parse_args()
 
 
@@ -68,8 +73,8 @@ def load_image_guided_synthesis():
     """
     spec = importlib.util.spec_from_file_location(
         "real_eval_server",
-        os.path.join(os.path.dirname(__file__), "..", "scripts", "evaluation",
-                     "real_eval_server.py"))
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "..",
+                     "scripts", "evaluation", "real_eval_server.py"))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod.image_guided_synthesis, mod.load_model_checkpoint
@@ -178,16 +183,42 @@ def main():
 
         torch.manual_seed(a.seed + t)      # reproducible diffusion noise per anchor
         with torch.no_grad():
-            _, act, _ = igs(model, "placeholder", observation, noise_shape,
-                            ddim_steps=a.ddim_steps, ddim_eta=1.0,
-                            unconditional_guidance_scale=1.0,
-                            fs=30 / 2, timestep_spacing="uniform_trailing",
-                            guidance_rescale=0.7)
+            vid, act, _ = igs(model, "placeholder", observation, noise_shape,
+                              ddim_steps=a.ddim_steps, ddim_eta=1.0,
+                              unconditional_guidance_scale=1.0,
+                              fs=30 / 2, timestep_spacing="uniform_trailing",
+                              guidance_rescale=0.7)
         act = act[..., mask[0] == 1.0][0].cpu()
         act = dset.unnormalizer({'action': act})['action'].numpy().astype(np.float32)
 
         gt = gt_actions[t:t + a.horizon]
+
+        # The video branch is trained jointly with the action branch, so it is a
+        # second, independent read on whether anything was memorised. Compare the
+        # generated frames against ground truth at the dataset's own stride.
+        vm = {}
+        gt_frames = vr.get_batch([t + a.frame_stride * i
+                                  for i in range(a.horizon)]).asnumpy()
+        v = vid[0].detach().cpu().float().clamp(-1, 1)          # (C,T,H,W)
+        v = ((v + 1) / 2 * 255).permute(1, 2, 3, 0).numpy()      # (T,H,W,C) uint8-ish
+        gt_im = np.transpose(gt_frames, (0, 2, 3, 1)).astype(np.float32)
+        v = np.clip(v, 0, 255)
+        mse = float(((v - gt_im) ** 2).mean())
+        vm = {"video_psnr": float(10 * np.log10(255.0 ** 2 / max(mse, 1e-9))),
+              "video_mae_px": float(np.abs(v - gt_im).mean()),
+              "gt_frame_mae_px": float(np.abs(gt_im - gt_im.mean()).mean())}
+        if a.dump_video:
+            import imageio
+            imageio.mimsave(os.path.join(a.out, f"video_anchor{t:05d}.mp4"),
+                            [x.astype(np.uint8) for x in v], fps=15)
+            half = [np.concatenate([x.astype(np.uint8),
+                                    np.clip(y, 0, 255).astype(np.uint8)], axis=1)
+                    for x, y in zip(gt_im, v)]
+            imageio.mimsave(os.path.join(a.out, f"cmp_anchor{t:05d}.mp4"),
+                            half, fps=15)
+
         m = metrics(act, gt, gt_states[t])
+        m.update(vm)
         m["anchor"] = int(t)
         m["seconds"] = round(time.time() - t0, 2)
         per_anchor.append(m)
@@ -200,7 +231,8 @@ def main():
 
     agg = {}
     for k in ("mae", "mae_no_motion", "ratio_vs_baseline", "delta_pred",
-              "delta_gt", "delta_ratio", "corr", "endpoint"):
+              "delta_gt", "delta_ratio", "corr", "endpoint",
+              "video_psnr", "video_mae_px"):
         vals = [m[k] for m in per_anchor if not np.isnan(m[k])]
         agg[k] = float(np.mean(vals)) if vals else float("nan")
         agg[k + "_std"] = float(np.std(vals)) if vals else float("nan")
@@ -234,6 +266,8 @@ def main():
     print(f"  per-step |delta| {agg['delta_pred']:.4f}  vs GT {agg['delta_gt']:.4f}"
           f"  (ratio {agg['delta_ratio']:.1f}x)")
     print(f"  correlation      {agg['corr']:+.4f}")
+    print(f"  video PSNR       {agg['video_psnr']:.2f} dB"
+          f"  (pixel MAE {agg['video_mae_px']:.2f})")
     print(f"  verdict          beats_no_motion={summary['verdict']['beats_no_motion_baseline']}"
           f"  delta_within_5x_of_gt={summary['verdict']['delta_within_5x_of_gt']}")
     print(f"  wrote {a.out}")
