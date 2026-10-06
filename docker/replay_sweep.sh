@@ -14,7 +14,12 @@ GPU="$1"; RUN="$2"; shift 2
 STEPS=("$@")
 
 REPO=/data/docker-services/world_action_models/unifolm_wma
+# This script runs on the host, but /experiments is the CONTAINER mount point.
+# Paths given to docker compose (--out) use /experiments/...; anything bash
+# itself touches - log redirection, reading results - must use the real host path.
 EXP=/experiments/unifolm_wma
+EXP_HOST=/data/docker-services/world_action_models/experiments
+LOG_DIR="$EXP_HOST/logs"
 CKPT_DIR="$REPO/docker_data/runs/$RUN/checkpoints"
 
 cd "$REPO/docker"
@@ -43,7 +48,7 @@ for STEP in "${STEPS[@]}"; do
   fi
   echo "  --- step $STEP ---"
   START=$(date +%s)
-  STEP_LOG=/experiments/logs/replay_${RUN}_step${STEP}.log
+  STEP_LOG="$LOG_DIR/replay_${RUN}_step${STEP}.log"
   if WMA_GPU="$GPU" docker compose run --rm --no-deps \
       -e WMA_GPU="$GPU" \
       wma-shell python docker/replay_eval.py \
