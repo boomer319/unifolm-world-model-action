@@ -23,8 +23,17 @@ def load(runs_dir, run):
         rows = list(csv.DictReader(f))
     series = []
     for r in rows:
-        m = {k[2:]: float(v) for k, v in r.items()
-             if k.startswith("m_") and v not in ("", None)}
+        # Column names are m_<pl metric name>, and PL prefixes training metrics
+        # with "train/". Strip both so --keys can be written as loss_step.
+        m = {}
+        for k, v in r.items():
+            if not k.startswith("m_") or v in ("", None):
+                continue
+            name = k[2:]
+            for prefix in ("train/", "val/", "test/"):
+                if name.startswith(prefix):
+                    name = name[len(prefix):]
+            m[name] = float(v)
         series.append({"wall_s": float(r["wall_s"]),
                        "batch": int(r["batch"]),
                        "global_step": int(r["global_step"]),
@@ -99,10 +108,14 @@ def main():
         walls = [s["wall_s"] for s in series]
         deltas = sorted(walls[i + 1] - walls[i] for i in range(3, len(walls) - 1))
         med = deltas[len(deltas) // 2] if deltas else float("nan")
-        peak = max(s["peak_GiB"] for s in series if s["peak_GiB"] is not None)
+        peaks = [s["peak_GiB"] for s in series if s["peak_GiB"] is not None]
+        peak = max(peaks)
+        # torch's max_memory_allocated is a high-water mark and includes a
+        # startup transient; the steady figure is the last recorded value.
+        steady = series[-1]["peak_GiB"]
         ended = (summ or {}).get("ended_by", "?")
         print(f"  {run:22s} {len(series):>8} {walls[-1]:>8.1f} {med:>8.2f} "
-              f"{peak:>9.2f} {ended[:12]:>12}")
+              f"{peak:>9.2f} {steady:>11.2f} {ended[:12]:>12}")
     print("\n  NOTE: pytorch-lightning 1.9.5 counts max_steps/global_step in")
     print("        BATCHES, not optimizer updates, so batches / accumulate =")
     print("        the number of weight updates.")
