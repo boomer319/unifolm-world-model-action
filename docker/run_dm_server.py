@@ -62,22 +62,20 @@ _orig_lm_init = _D.LatentVisualDiffusion.__init__
 
 def _lm_init(self, *a, **k):
     _orig_lm_init(self, *a, **k)
+    for attr in ("agent_state_dim", "agent_action_dim", "n_obs_steps_acting",
+                 "n_obs_steps_imagen", "decision_making_only"):
+        print(f"[MODEL] self.{attr:22s} = {getattr(self, attr, 'MISSING')}", flush=True)
     try:
-        head = self.model.diffusion_model.unet_head
-        print("[MODEL] agent_state_dim  =", getattr(self, "agent_state_dim", "MISSING"),
-              flush=True)
-        print("[MODEL] agent_action_dim =", getattr(self, "agent_action_dim", "MISSING"),
-              flush=True)
-        print("[MODEL] n_obs_steps_acting =", getattr(self, "n_obs_steps_acting", "MISSING"),
-              flush=True)
-        print("[MODEL] unet_head horizon =", getattr(head, "horizon", "?"),
-              "| input_dim =", getattr(head, "input_dim", "?"),
-              "| final_conv out =", getattr(head, "final_conv.out_channels", "?"),
-              flush=True)
-        print("[MODEL] n_obs_steps in cond[2] is used as the "
-              "action/state branch selector", flush=True)
+        dm = self.model.diffusion_model
+        print(f"[MODEL] inner .model type = {type(self.model).__name__}", flush=True)
+        print(f"[MODEL] diffusion_model    = {type(dm).__name__}", flush=True)
+        for name in ("action_unet", "state_unet"):
+            head = getattr(dm, name, None)
+            print(f"[MODEL] {name}: horizon={getattr(head, 'horizon', '?')} "
+                  f"input_dim={getattr(head, 'input_dim', '?')} "
+                  f"n_obs_steps={getattr(head, 'n_obs_steps', '?')}", flush=True)
     except Exception as e:
-        print("[MODEL] introspection failed:", e, flush=True)
+        print("[MODEL] head introspection failed:", type(e).__name__, e, flush=True)
 
 
 _D.LatentVisualDiffusion.__init__ = _lm_init
