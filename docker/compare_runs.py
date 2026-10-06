@@ -17,28 +17,45 @@ import os
 import statistics
 
 
+def _metrics_from(r):
+    """Strip the CSV bookkeeping keys and PL's train/ prefix off one row."""
+    m = {}
+    for k, v in r.items():
+        if not k.startswith("m_") or v in ("", None):
+            continue
+        name = k[2:]
+        for prefix in ("train/", "val/", "test/"):
+            if name.startswith(prefix):
+                name = name[len(prefix):]
+        m[name] = float(v)
+    return m
+
+
 def load(runs_dir, run):
+    """Return (per-update metrics, per-batch timing, manifest, summary)."""
     d = os.path.join(runs_dir, run)
-    with open(os.path.join(d, "metrics.csv")) as f:
-        rows = list(csv.DictReader(f))
+    # metrics.csv: one row per WEIGHT UPDATE - the loss-curve axis
     series = []
-    for r in rows:
-        # Column names are m_<pl metric name>, and PL prefixes training metrics
-        # with "train/". Strip both so --keys can be written as loss_step.
-        m = {}
-        for k, v in r.items():
-            if not k.startswith("m_") or v in ("", None):
-                continue
-            name = k[2:]
-            for prefix in ("train/", "val/", "test/"):
-                if name.startswith(prefix):
-                    name = name[len(prefix):]
-            m[name] = float(v)
-        series.append({"wall_s": float(r["wall_s"]),
-                       "batch": int(r["batch"]),
-                       "global_step": int(r["global_step"]),
-                       "peak_GiB": float(r["peak_GiB"]) if r["peak_GiB"] else None,
-                       **m})
+    with open(os.path.join(d, "metrics.csv")) as f:
+        for r in csv.DictReader(f):
+            series.append({
+                "update": int(r.get("update") or 0),
+                "global_step": int(r.get("global_step") or 0),
+                "epoch": int(r.get("epoch") or 0),
+                "wall_s": float(r["wall_s"]),
+                "peak_GiB": float(r["peak_GiB"]) if r.get("peak_GiB") else None,
+                **_metrics_from(r),
+            })
+    # timing.csv: one row per BATCH - the s/batch axis
+    timing = []
+    tpath = os.path.join(d, "timing.csv")
+    if os.path.exists(tpath):
+        with open(tpath) as f:
+            for r in csv.DictReader(f):
+                timing.append({"batch": int(r["batch"]),
+                               "wall_s": float(r["wall_s"]),
+                               "loss_total": float(r["loss_total"])
+                               if r.get("loss_total") else None})
     manifest = summary = None
     for name, setter in (("manifest.json", "manifest"), ("summary.json", "summary")):
         p = os.path.join(d, name)
@@ -100,28 +117,34 @@ def main():
     print("=" * 78)
     print(" cost")
     print("=" * 78)
-    print(f"  {'run':22s} {'batches':>8} {'wall_s':>8} {'s/batch':>8} "
-          f"{'peak_GiB':>9} {'ended_by':>12}")
-    for run, (series, _, _, summ) in data.items():
+    print(f"  {'run':22s} {'upd':>6} {'batch':>6} {'wall_s':>8} {'s/batch':>8} "
+          f"{'s/update':>9} {'peak_GiB':>9} {'ended_by':>12}")
+    for run, (series, timing, _, summ) in data.items():
         if not series:
             continue
-        walls = [s["wall_s"] for s in series]
-        deltas = sorted(walls[i + 1] - walls[i] for i in range(3, len(walls) - 1))
-        med = deltas[len(deltas) // 2] if deltas else float("nan")
-        peaks = [s["peak_GiB"] for s in series if s["peak_GiB"] is not None]
-        peak = max(peaks)
-        # torch's max_memory_allocated is a high-water mark and includes a
-        # startup transient; the steady figure is the last recorded value.
-        steady = series[-1]["peak_GiB"]
-        ended = (summ or {}).get("ended_by", "?")
-        print(f"  {run:22s} {len(series):>8} {walls[-1]:>8.1f} {med:>8.2f} "
-              f"{peak:>9.2f} {steady:>11.2f} {ended[:12]:>12}")
+        walls = [x["wall_s"] for x in series]
+        du = sorted(walls[i + 1] - walls[i] for i in range(len(walls) - 1))
+        med_u = du[len(du) // 2] if du else float("nan")
+        if timing and len(timing) > 4:
+            tw = [t["wall_s"] for t in timing]
+            dt = sorted(tw[i + 1] - tw[i] for i in range(3, len(tw) - 1))
+            med_b = dt[len(dt) // 2] if dt else float("nan")
+            nb = len(timing)
+        else:
+            med_b, nb = float("nan"), len(series)
+        peak = max(x["peak_GiB"] for x in series if x["peak_GiB"] is not None)
+        ended = (summ or {}).get("ended_by", "running")
+        print(f"  {run:22s} {len(series):>6} {nb:>6} {walls[-1]:>8.1f} {med_b:>8.2f} "
+              f"{med_u:>9.2f} {peak:>9.2f} {ended[:12]:>12}")
     print("\n  NOTE: pytorch-lightning 1.9.5 counts max_steps/global_step in")
-    print("        BATCHES, not optimizer updates, so batches / accumulate =")
-    print("        the number of weight updates.")
+    print("        BATCHES, so weight updates = batches / accumulate_grad_batches;")
+    print("        with this config one batch is one update. s/batch comes from")
+    print("        timing.csv, s/update from metrics.csv.")
+    print("        peak_GiB is torch's max_memory_allocated high-water mark and")
+    print("        includes a startup transient.")
 
     # --------------------------------------------------------------- curves
-    n = min(len(s) for s, _, _ in data.values()) if data else 0
+    n = min(len(s) for s, _, _, _ in data.values()) if data else 0
     idx = list(range(0, n, args.step)) + ([n - 1] if n and (n - 1) % args.step else [])
     for k in args.keys:
         print()
