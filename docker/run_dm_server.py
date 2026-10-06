@@ -101,6 +101,37 @@ def _sample(self, *a, **k):
 
 _DDIM.DDIMSampler.sample = _sample
 
+# The server builds the action mask from the payload and then indexes the
+# returned chunk with it. A (1,16,28) chunk reduced to (16,2) means the mask had
+# exactly 2 True entries, i.e. the action it was built from had last dim 2 - not
+# the 28 the client sent. Trace both.
+import unifolm_wma.data.wma_data as _WD
+
+_orig_mu = _WD.WMAData._map_to_uni_action
+_orig_ms = _WD.WMAData._map_to_uni_state
+
+
+def _mu(self, action, action_type):
+    uni, mask = _orig_mu(self, action, action_type)
+    print(f"[MAP] _map_to_uni_action: in {tuple(action.shape)} -> "
+          f"uni {tuple(uni.shape)} mask {tuple(mask.shape)} "
+          f"true-per-row={mask.sum(-1)[:4].tolist()} "
+          f"max_action_dim={getattr(self, 'max_action_dim', '?')}", flush=True)
+    return uni, mask
+
+
+def _ms(self, state, state_type):
+    uni, mask = _orig_ms(self, state, state_type)
+    print(f"[MAP] _map_to_uni_state : in {tuple(state.shape)} -> "
+          f"uni {tuple(uni.shape)} mask {tuple(mask.shape)} "
+          f"true-per-row={mask.sum(-1)[:4].tolist()} "
+          f"max_state_dim={getattr(self, 'max_state_dim', '?')}", flush=True)
+    return uni, mask
+
+
+_WD.WMAData._map_to_uni_action = _mu
+_WD.WMAData._map_to_uni_state = _ms
+
 if __name__ == "__main__":
     print("[DEBUG] Unnormalize traced; running scripts/evaluation/real_eval_server.py",
           flush=True)
