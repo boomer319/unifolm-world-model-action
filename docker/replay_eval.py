@@ -222,20 +222,22 @@ def main():
               "video_mae_px": float(np.abs(v - gt_im).mean()),
               "gt_frame_mae_px": float(np.abs(gt_im - gt_im.mean()).mean())}
         if a.dump_video:
-            # Same writer the server uses, rather than imageio: its pyav plugin
-            # failed to infer a codec for this clip ("needs one of codec_name or
-            # template"), and reusing the server's writer keeps the figures
-            # identical in character to the deployed output.
-            import torchvision
-            gen = np.clip(v, 0, 255).astype(np.uint8)                 # (T,H,W,C)
-            ref = np.clip(gt_im, 0, 255).astype(np.uint8)
-            side = np.concatenate([ref, gen], axis=2)                 # (T,H,2W,C)
-            for name, arr in (("video", gen), ("cmp", side)):
-                clip = torch.from_numpy(arr).permute(0, 3, 1, 2)      # (T,C,H,W)
-                torchvision.io.write_video(
-                    os.path.join(a.out, f"{name}_anchor{t:05d}.mp4"),
-                    clip, fps=15, video_codec="h264",
-                    options={"crf": "10"})
+            # Upstream's own writer, unifolm_wma.utils.save_video.tensor_to_mp4.
+            # It takes (b, c, t, h, w) in -1..1 and does the permute to the
+            # (T, H, W, C) layout torchvision.io.write_video wants. Hand-rolling
+            # that permute got it wrong twice (imageio could not infer a codec,
+            # then write_video rejected a (3, 320, 512) frame), so the packaged
+            # utility is both shorter and correct.
+            from unifolm_wma.utils.save_video import tensor_to_mp4
+            tensor_to_mp4(vid.detach().cpu(), os.path.join(
+                a.out, f"video_anchor{t:05d}.mp4"), fps=15)
+            # Ground truth alongside, built the same way so both clips share a
+            # writer and a resolution: ref on the left, prediction on the right.
+            ref = torch.from_numpy(gt_im).permute(3, 0, 1, 2) * 2 - 1  # (C,T,H,W)
+            gen = vid[0].detach().cpu()
+            side = torch.cat([ref, gen], dim=3).unsqueeze(0)           # (1,C,T,2H,W)
+            tensor_to_mp4(side, os.path.join(a.out, f"cmp_anchor{t:05d}.mp4"),
+                          fps=15)
 
         m = metrics(act, gt, gt_states[t])
         m.update(vm)
