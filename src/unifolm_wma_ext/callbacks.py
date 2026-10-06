@@ -256,7 +256,9 @@ class RunRecorder(pl.Callback):
         ])
         self._tfh.flush()
 
-    def on_before_optimizer_step(self, trainer, pl_module, optimizer):
+    # opt_idx was added to the hook signature in pytorch-lightning 1.8; accept it
+    # optionally so the callback works on 1.5-1.7 too.
+    def on_before_optimizer_step(self, trainer, pl_module, optimizer, opt_idx=0):
         """One metrics row per WEIGHT UPDATE - the useful x-axis for a curve."""
         if self._writer is None:
             return
