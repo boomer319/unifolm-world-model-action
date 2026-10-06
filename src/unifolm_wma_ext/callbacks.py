@@ -150,7 +150,8 @@ class RunRecorder(pl.Callback):
             },
             "base_checkpoint": {
                 "path": self._base_ckpt(trainer),
-                "exists": bool(self.base_ckpt and os.path.exists(self.base_ckpt)),
+                "exists": bool(self._base_ckpt(trainer) and
+                               os.path.exists(self._base_ckpt(trainer))),
                 "sha256_first_1MiB": _sha256(self._base_ckpt(trainer), 1 << 20)
                 if self._base_ckpt(trainer) and
                 os.path.exists(self._base_ckpt(trainer)) else None,
