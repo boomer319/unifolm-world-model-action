@@ -324,7 +324,12 @@ def main():
             _TF_FRAMES["x"] = gt_for_tf
             _, act_tf = _run("tf")
             _TF_FRAMES["x"] = None
-        gt = gt_actions[t:t + a.horizon]
+        # Ground truth on the STRIDE the model was trained on. WMAData samples
+        # its targets as action[start_idx + frame_stride*i], so the chunk we
+        # predict ends at t + stride*(horizon-1) and index i pairs with
+        # t + stride*i - not with t + i. Scoring against contiguous actions
+        # understates the model: it reports ratio 2.20 where 1.68 is correct.
+        gt = gt_actions[t + a.frame_stride * np.arange(a.horizon)]
 
         # The video branch is trained jointly with the action branch, so it is a
         # second, independent read on whether anything was memorised. Compare the
