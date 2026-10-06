@@ -43,7 +43,11 @@ echo "    max_steps  : $STEPS (batches == weight updates here)"
 echo "    ckpt every : $EVERY  (~$((STEPS / EVERY * 16)) GB)"
 echo "    log        : ../docker_data/logs/$NAME.log"
 
-exec docker compose run --rm wma-shell \
+# -e WITHOUT a value forwards the exported host variable into the container.
+# Exporting alone is not enough: compose only passes what is listed in the
+# service environment or given with -e, so all four runs silently fell back to
+# the same runs/tensorboard directory and overwrote each other's CSVs.
+exec docker compose run --rm -e WMA_RUN_NAME -e WMA_BASE_CKPT wma-shell \
     python scripts/trainer.py --train \
         --base configs/train/config_g1_dex3.yaml \
         --name "$NAME" \
