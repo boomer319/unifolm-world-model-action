@@ -187,7 +187,8 @@ def main():
     # because the latent is re-noised at each step with the model's own
     # q_sample, the noise level still matches the step being evaluated.
     # ---------------------------------------------------------------------
-    _TFZ = {"z": None}
+    _TFZ = {"z": None, "gen": torch.Generator(device=model.device)}
+    _TFZ["gen"].manual_seed(a.seed)
     if a.teacher_force_z:
         # Class hierarchy, verified rather than assumed:
         #   DDPM -> LatentDiffusion (encode_first_stage) -> LatentVisualDiffusion
@@ -224,7 +225,15 @@ def main():
                 # block, which is ground truth anyway since the observation
                 # frames sent to the server are real.
                 nc = z0.shape[1]
-                eps = torch.randn_like(x[:, :nc])
+                # Draw the substitution noise from a DEDICATED generator. Using
+                # torch.randn_like here would consume draws from the global RNG,
+                # shifting the stream the DDIM sampler uses for the ACTION branch
+                # - so the normal and teacher-forced runs would differ in the
+                # action noise as well as in the conditioning, and the measured
+                # difference would be confounded. A private generator leaves the
+                # global stream untouched, making the pair exactly comparable.
+                eps = torch.randn(x[:, :nc].shape, device=x.device,
+                                  dtype=x.dtype, generator=_TFZ["gen"])
                 new_x = x.clone()
                 # q_sample's signature is (x_start, t, noise) - x_start FIRST.
                 # Passing (ts, z0, eps) positionally put the float latent where
