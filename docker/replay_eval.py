@@ -158,9 +158,15 @@ def main():
     vr = VideoReader(os.path.join(a.data_dir, "videos", a.dataset, a.view, "0.mp4"),
                      ctx=cpu(0))
 
-    # Anchor points: spread over the episode, leaving room for the horizon and
-    # for the 2-frame observation history.
-    lo, hi = 2, T - a.horizon - 1
+    # Anchor points: spread over the episode. The limit is set by the VIDEO
+    # comparison, not the actions: at frame_stride 2 the last compared ground
+    # truth frame is t + 2*(horizon-1), so an anchor placed for the action chunk
+    # alone can run past the end of the episode and decord raises.
+    lo, hi = 2, T - a.frame_stride * (a.horizon - 1) - 1
+    if hi <= lo:
+        raise RuntimeError(
+            f"episode too short for {a.horizon} frames at stride "
+            f"{a.frame_stride}: T={T}")
     anchors = np.linspace(lo, hi, a.anchors).astype(int).tolist()
 
     h, w = a.height // 8, a.width // 8
