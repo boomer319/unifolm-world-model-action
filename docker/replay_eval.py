@@ -154,6 +154,12 @@ def main():
         #      .action_unet                   ConditionalUnet1D   <- the head
         # Guessing this twice cost two runs; introspect the tree instead.
         head = model.model.diffusion_model.action_unet
+        for _obj, _attr, _where in ((model, "n_obs_steps_acting", "model"),
+                                    (head, "forward", "action_unet")):
+            if not hasattr(_obj, _attr):
+                raise AttributeError(
+                    f"teacher forcing needs {_where}.{_attr}, which does not "
+                    f"exist - check the module tree before running")
         _orig_head_forward = head.forward
 
         def _tf_forward(sample, timestep, imagen_cond=None, cond=None, **kw):
@@ -250,8 +256,8 @@ def main():
         gt_for_tf = None
         if a.teacher_force:
             # The next two true frames, in the head's (B, C, T, H, W) layout.
-            fut = vr.get_batch([t + a.frame_stride * i
-                                for i in range(model.model.n_obs_steps_acting)]
+            n_act = model.n_obs_steps_acting   # on the LatentVisualDiffusion
+            fut = vr.get_batch([t + a.frame_stride * i for i in range(n_act)]
                               ).asnumpy()
             ft = dset.spatial_transform(
                 torch.tensor(np.transpose(fut, (0, 3, 1, 2)))).to(device)
