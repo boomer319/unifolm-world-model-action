@@ -222,14 +222,20 @@ def main():
               "video_mae_px": float(np.abs(v - gt_im).mean()),
               "gt_frame_mae_px": float(np.abs(gt_im - gt_im.mean()).mean())}
         if a.dump_video:
-            import imageio
-            imageio.mimsave(os.path.join(a.out, f"video_anchor{t:05d}.mp4"),
-                            [x.astype(np.uint8) for x in v], fps=15)
-            half = [np.concatenate([x.astype(np.uint8),
-                                    np.clip(y, 0, 255).astype(np.uint8)], axis=1)
-                    for x, y in zip(gt_im, v)]
-            imageio.mimsave(os.path.join(a.out, f"cmp_anchor{t:05d}.mp4"),
-                            half, fps=15)
+            # Same writer the server uses, rather than imageio: its pyav plugin
+            # failed to infer a codec for this clip ("needs one of codec_name or
+            # template"), and reusing the server's writer keeps the figures
+            # identical in character to the deployed output.
+            import torchvision
+            gen = np.clip(v, 0, 255).astype(np.uint8)                 # (T,H,W,C)
+            ref = np.clip(gt_im, 0, 255).astype(np.uint8)
+            side = np.concatenate([ref, gen], axis=2)                 # (T,H,2W,C)
+            for name, arr in (("video", gen), ("cmp", side)):
+                clip = torch.from_numpy(arr).permute(0, 3, 1, 2)      # (T,C,H,W)
+                torchvision.io.write_video(
+                    os.path.join(a.out, f"{name}_anchor{t:05d}.mp4"),
+                    clip, fps=15, video_codec="h264",
+                    options={"crf": "10"})
 
         m = metrics(act, gt, gt_states[t])
         m.update(vm)
