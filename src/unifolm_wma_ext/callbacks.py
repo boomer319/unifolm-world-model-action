@@ -166,6 +166,32 @@ class RunRecorder(pl.Callback):
 
         total = sum(p.numel() for p in pl_module.parameters())
         trainable = sum(p.numel() for p in pl_module.parameters() if p.requires_grad)
+
+        # Resolve the config from the copy init_workspace saved inside THIS run
+        # directory, not from the path passed in params. The passed path is a
+        # literal written into the config file, so any config derived from
+        # another one inherits the original's path - which is how the obs4 arms
+        # ended up recording config_g1_dex3.yaml while running
+        # config_g1_dex3_obs4.yaml. A stale provenance field is worse than an
+        # absent one, because a reader checks it first and believes it.
+        run_cfg = os.path.join(self.run_dir, "configs", "model.yaml")
+        cfg_path = run_cfg if os.path.exists(run_cfg) else self.config
+        cfg_sha = _sha256(cfg_path) if cfg_path and os.path.exists(cfg_path) else None
+        cfg_src = "run_dir" if os.path.exists(run_cfg) else "params"
+        # What the saved config actually asked for, so a mismatch is visible
+        # rather than silent.
+        cfg_facts = None
+        try:
+            import yaml as _yaml
+            with open(cfg_path) as _f:
+                _m = _yaml.safe_load(_f) or {}
+            cfg_facts = {k: _m.get(k) for k in
+                         ("n_obs_steps_imagen", "n_obs_steps_acting",
+                          "agent_state_dim", "agent_action_dim",
+                          "decision_making_only", "base_learning_rate")}
+        except Exception:
+            cfg_facts = None
+
         manifest = {
             "run_name": self.run_name,
             "started_utc": datetime.now(timezone.utc).isoformat(),
@@ -176,9 +202,14 @@ class RunRecorder(pl.Callback):
                 "remote": _git("remote", "get-url", "origin"),
             },
             "config": {
-                "path": self.config,
-                "sha256": _sha256(self.config) if self.config and
-                os.path.exists(self.config) else None,
+                "path": cfg_path,
+                "sha256": cfg_sha,
+                "resolved_from": cfg_src,
+                "params_path": self.config,
+                "params_path_matches": bool(self.config) and
+                                     os.path.abspath(self.config or "") ==
+                                     os.path.abspath(cfg_path or ""),
+                "facts": cfg_facts,
             },
             "base_checkpoint": {
                 "path": self._base_ckpt(trainer),
