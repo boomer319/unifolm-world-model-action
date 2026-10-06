@@ -205,11 +205,17 @@ def main():
         # second, independent read on whether anything was memorised. Compare the
         # generated frames against ground truth at the dataset's own stride.
         vm = {}
+        # decord returns (T,H,W,C) in the source resolution (640x480); the model
+        # works at 320x512 after resize_center_crop. Put ground truth through the
+        # SAME transform the observations go through, so the comparison is like
+        # for like instead of against a differently sized frame.
         gt_frames = vr.get_batch([t + a.frame_stride * i
                                   for i in range(a.horizon)]).asnumpy()
+        gt_t = torch.tensor(np.transpose(gt_frames, (0, 3, 1, 2)))   # (T,C,H,W)
+        gt_im = dset.spatial_transform(gt_t).permute(0, 2, 3, 1).numpy().astype(np.float32)
+
         v = vid[0].detach().cpu().float().clamp(-1, 1)          # (C,T,H,W)
-        v = ((v + 1) / 2 * 255).permute(1, 2, 3, 0).numpy()      # (T,H,W,C) uint8-ish
-        gt_im = np.transpose(gt_frames, (0, 2, 3, 1)).astype(np.float32)
+        v = ((v + 1) / 2 * 255).permute(1, 2, 3, 0).numpy()      # (T,H,W,C)
         v = np.clip(v, 0, 255)
         mse = float(((v - gt_im) ** 2).mean())
         vm = {"video_psnr": float(10 * np.log10(255.0 ** 2 / max(mse, 1e-9))),
