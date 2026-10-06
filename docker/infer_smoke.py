@@ -9,14 +9,24 @@ It also answers the question the training runs cannot: how fast is one policy
 query? That number decides how often the Isaac Sim provider may call the model,
 since every call runs a 16-frame DDIM world-model rollout.
 
-The request format is the one scripts/evaluation/real_eval_server.py expects:
-    {'observation.images.top': <3,H,W> uint8,
-     'observation.state':      <28,>,
+The request format is the one scripts/evaluation/real_eval_server.py expects,
+and both the image and the state carry a TIME axis of n_obs_steps (=2):
+
+    {'observation.images.top': <2,3,H,W> uint8,   # (T,C,H,W)
+     'observation.state':      <2,28>,             # (T,DoF) history
      'action':                 <16,28> zeros,
      'language_instruction':   <str>}
-Note the image is CHW: the server applies torchvision transforms to it and then
-unsqueezes, so (3,H,W) -> (1,3,H,W) is what the UNet expects. Sending HWC
-silently misinterprets the channels.
+
+Two interface facts, both found by running this client:
+- the image must be (T,C,H,W): the server does img[:, -1] and
+  img.permute(0,2,1,3,4), so the model consumes (B,T,C,H,W), and the server
+  obtains that from spatial_transform(images).unsqueeze(0). A (3,H,W) payload
+  becomes (1,3,H,W) and the channel axis is then read as time;
+- the state must be 2-D: wma_data._map_to_uni_state does
+  uni_state_mask[:, :state_dim] = 1.
+
+So the policy is conditioned on a 2-frame observation history, which the Isaac
+Sim provider will have to buffer.
 
 Usage (inside the container):
     python docker/infer_smoke.py --url http://127.0.0.1:8000/predict_action \
@@ -43,12 +53,22 @@ def parse_args():
     return p.parse_args()
 
 
-def read_frame(path, index=0):
-    """Decode one frame as CHW uint8 via decord (the same reader WMAData uses)."""
+def read_frames(path, indices):
+    """Decode frames as (T,C,H,W) uint8 via decord (the reader WMAData uses).
+
+    The time axis is required: scripts/evaluation/real_eval_server.py does
+    img[:, -1, ...] and img.permute(0, 2, 1, 3, 4), i.e. it expects
+    (B, T, C, H, W). Its own pipeline builds that with
+    spatial_transform(images).unsqueeze(0), so the payload must already be
+    (T, C, H, W) - one entry per observation frame, n_obs_steps_imagen of them.
+    Sending (C, H, W) yields (B=1, C, H, W) and the model then treats the
+    channel axis as time.
+    """
     from decord import VideoReader, cpu
     vr = VideoReader(path, ctx=cpu(0))
-    frame = vr[index].asnumpy()          # H,W,C uint8
-    return np.transpose(frame, (2, 0, 1)).copy()
+    idx = [min(i, len(vr) - 1) for i in indices]
+    frames = vr.get_batch(idx).asnumpy()          # T,H,W,C uint8
+    return np.transpose(frames, (0, 3, 1, 2)).copy()
 
 
 def post(url, payload, timeout):
@@ -70,15 +90,23 @@ def main():
     mp4 = f"{root}/videos/{args.dataset}/{args.view}/0.mp4"
     h5_path = f"{root}/transitions/{args.dataset}/0.h5"
 
+    # The state must be a (n_obs_steps, DoF) HISTORY, not a single frame:
+    # wma_data._map_to_uni_state does uni_state_mask[:, :state_dim] = 1, which
+    # requires 2 dimensions, and the config sets n_obs_steps: 2. The server then
+    # unsqueezes to (1, 2, 28). Sending a bare (28,) vector raises
+    # IndexError: too many indices for tensor of dimension 1.
     with h5py.File(h5_path, "r") as f:
-        state = np.array(f["observation.state"][0], dtype=np.float32)
+        all_states = np.array(f["observation.state"][:], dtype=np.float32)
         attrs = {k: f.attrs[k] for k in f.attrs.keys()}
+    n_obs = 2
+    state = np.stack([all_states[0]] * n_obs) if len(all_states) < n_obs \
+        else all_states[:n_obs]
     import pandas as pd
     instruction = pd.read_csv(f"{root}/{args.dataset}.csv").iloc[0]["instruction"]
 
-    image = read_frame(mp4, 0)
-    print(f"frame        {image.shape} {image.dtype}  (CHW)")
-    print(f"state        {state.shape} {state.dtype}")
+    image = read_frames(mp4, [0, 1])
+    print(f"image        {image.shape} {image.dtype}  (T,C,H,W)")
+    print(f"state        {state.shape} {state.dtype}  (n_obs_steps={n_obs}, DoF={state.shape[-1]})")
     print(f"instruction  {instruction!r}")
     print(f"h5 attrs     {attrs}")
 
