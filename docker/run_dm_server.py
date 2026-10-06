@@ -52,6 +52,36 @@ def _forward(self, batch):
 N.Unnormalize.__init__ = _init
 N.Unnormalize.forward = _forward
 
+# Also report the dimensions the constructed model believes it has, since the
+# DDIM sampler builds its action noise as (b, 16, model.agent_action_dim) and
+# the returned chunk came back with 2 values per step instead of 28.
+import unifolm_wma.models.ddpms as _D
+
+_orig_lm_init = _D.LatentVisualDiffusion.__init__
+
+
+def _lm_init(self, *a, **k):
+    _orig_lm_init(self, *a, **k)
+    try:
+        head = self.model.diffusion_model.unet_head
+        print("[MODEL] agent_state_dim  =", getattr(self, "agent_state_dim", "MISSING"),
+              flush=True)
+        print("[MODEL] agent_action_dim =", getattr(self, "agent_action_dim", "MISSING"),
+              flush=True)
+        print("[MODEL] n_obs_steps_acting =", getattr(self, "n_obs_steps_acting", "MISSING"),
+              flush=True)
+        print("[MODEL] unet_head horizon =", getattr(head, "horizon", "?"),
+              "| input_dim =", getattr(head, "input_dim", "?"),
+              "| final_conv out =", getattr(head, "final_conv.out_channels", "?"),
+              flush=True)
+        print("[MODEL] n_obs_steps in cond[2] is used as the "
+              "action/state branch selector", flush=True)
+    except Exception as e:
+        print("[MODEL] introspection failed:", e, flush=True)
+
+
+_D.LatentVisualDiffusion.__init__ = _lm_init
+
 if __name__ == "__main__":
     print("[DEBUG] Unnormalize traced; running scripts/evaluation/real_eval_server.py",
           flush=True)
