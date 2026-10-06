@@ -277,7 +277,7 @@ def main():
     channels = model.model.diffusion_model.out_channels
     noise_shape = [1, channels, a.horizon, h, w]
 
-    preds, preds_tf, gts, anchors_state = [], [], [], []
+    preds, preds_tf, preds_tfz, gts, anchors_state = [], [], [], [], []
     per_anchor = []
     for t in anchors:
         t0 = time.time()
@@ -335,9 +335,15 @@ def main():
                 z_gt = model.encode_first_stage(
                     gt_t.permute(1, 0, 2, 3).unsqueeze(0))
 
-        _TFZ["z"] = z_gt
-        vid, act = _run("normal")
+        # The baseline MUST run with both substitutions off. Setting _TFZ before
+        # the baseline was a bug that made "normal" identical to "tfz", so the
+        # experiment would have reported a null result for a trivial reason and
+        # manufactured the conclusion. Order matters: baseline, then one
+        # intervention at a time.
         _TFZ["z"] = None
+        _TF_FRAMES["x"] = None
+        vid, act = _run("normal")
+
         act_tfz = None
         if a.teacher_force_z:
             _TFZ["z"] = z_gt
@@ -414,7 +420,10 @@ def main():
             m["tfz_ratio_vs_baseline"] = mz["ratio_vs_baseline"]
             m["tfz_delta_pred"] = mz["delta_pred"]
             m["tfz_corr"] = mz["corr"]
-            preds_tf.append(act_tfz)
+            # Separate array from the image-pathway pass. Both used to be
+            # appended to one list, which a rescorer indexing by anchor would
+            # silently mis-pair on the second half.
+            preds_tfz.append(act_tfz)
         m["anchor"] = int(t)
         m["seconds"] = round(time.time() - t0, 2)
         per_anchor.append(m)
@@ -456,6 +465,7 @@ def main():
         os.path.join(a.out, "replay.npz"),
         pred=np.stack(preds),
         pred_tf=(np.stack(preds_tf) if preds_tf else np.zeros(0)),
+        pred_tfz=(np.stack(preds_tfz) if preds_tfz else np.zeros(0)),
         gt=np.stack(gts),
         anchors=np.array([m["anchor"] for m in per_anchor]),
         anchor_states=np.stack(anchors_state))

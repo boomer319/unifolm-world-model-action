@@ -82,12 +82,13 @@ def main():
         else:
             continue
         anchors = d["anchors"]
-        if "pred_tf" in d and d["pred_tf"].size:
-            pred_tf = d["pred_tf"]
-        else:
-            pred_tf = None
+        # Two separate teacher-forced arrays: the image-pathway pass and the
+        # latent-pathway pass. They used to share one list, which made the
+        # second half mis-paired against anchors.
+        pred_tf = d["pred_tf"] if "pred_tf" in d and d["pred_tf"].size else None
+        pred_tfz = d["pred_tfz"] if "pred_tfz" in d and d["pred_tfz"].size else None
 
-        per_anchor, per_anchor_tf = [], []
+        per_anchor, per_anchor_tf, per_anchor_tfz = [], [], []
         for k, t in enumerate(anchors):
             gi = t + a.stride * np.arange(a.horizon)
             if gi.max() >= len(A):
@@ -96,8 +97,6 @@ def main():
             m = score(pred[k], gt, S[t])
             m["anchor"] = int(t)
             per_anchor.append(m)
-            # the teacher-forced array is the concatenation of the optional
-            # image-path and complete-path passes, each of len(anchors)
             if pred_tf is not None and k < len(pred_tf):
                 mtf = score(pred_tf[k], gt, S[t])
                 m["tf_mae"] = mtf["mae"]
@@ -105,6 +104,13 @@ def main():
                 m["tf_delta_pred"] = mtf["delta_pred"]
                 m["tf_corr"] = mtf["corr"]
                 per_anchor_tf.append(mtf)
+            if pred_tfz is not None and k < len(pred_tfz):
+                mz = score(pred_tfz[k], gt, S[t])
+                m["tfz_mae"] = mz["mae"]
+                m["tfz_ratio_vs_baseline"] = mz["ratio_vs_baseline"]
+                m["tfz_delta_pred"] = mz["delta_pred"]
+                m["tfz_corr"] = mz["corr"]
+                per_anchor_tfz.append(mz)
 
         if not per_anchor:
             continue
@@ -117,6 +123,9 @@ def main():
         if per_anchor_tf:
             for k in ("mae", "ratio_vs_baseline", "delta_pred", "corr"):
                 agg["tf_" + k] = float(np.mean([m[k] for m in per_anchor_tf]))
+        if per_anchor_tfz:
+            for k in ("mae", "ratio_vs_baseline", "delta_pred", "corr"):
+                agg["tfz_" + k] = float(np.mean([m[k] for m in per_anchor_tfz]))
 
         summary = json.load(open(path))
         old_ratio = summary["aggregate"].get("ratio_vs_baseline")
