@@ -38,7 +38,11 @@
 #      Budget: the full model is ~27 GB in fp32, so 10000 steps = 20 ckpts =
 #      ~540 GB. .240 had 2.1 TB free at setup time.
 model:
-  pretrained_checkpoint: ./checkpoints/unifolm_wma_base.ckpt
+  # The checkpoint that seeds the run. WMA_INIT_CKPT lets the launcher
+  # point this at any checkpoint - in particular at a trained one, to
+  # continue training for a second LR cycle instead of starting over.
+  # The default keeps the normal case working unchanged.
+  pretrained_checkpoint: ${oc.env:WMA_INIT_CKPT,./checkpoints/unifolm_wma_base.ckpt}
   base_learning_rate: 1.0e-05
   scale_lr: False
   target: unifolm_wma.models.ddpms.LatentVisualDiffusion

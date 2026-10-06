@@ -36,20 +36,19 @@ CONFIG=${7:-configs/train/config_g1_dex3.yaml}
 # not by starting a fresh run that would land in the same place within the time
 # budget. Weight-only, because save_weights_only means there is no optimizer
 # state to restore - this starts a fresh LR cycle, which is intended.
-RESUME_FROM=${8:-}
+# Optional 8th argument (unused placeholder kept for the documented positional
+# layout); continuation is done by passing a trained checkpoint as argument 3,
+# which WMA_INIT_CKPT feeds into model.pretrained_checkpoint.
+_UNUSED_8=${8:-}
 
 cd "$(dirname "$0")"
 
 export WMA_GPU="$GPU"
 export WMA_RUN_NAME="$NAME"
 export WMA_BASE_CKPT="/workspace/$CKPT"
-
-if [ -n "$RESUME_FROM" ]; then
-  RESUME_ARG="--auto_resume_weight_only $RESUME_FROM"
-  echo "    RESUME     : $RESUME_FROM (weight-only; fresh optimizer)"
-else
-  RESUME_ARG=""
-fi
+# This is what actually seeds the model: the config reads model.pretrained_checkpoint
+# from it. WMA_BASE_CKPT above is only recorded by the RunRecorder for provenance.
+export WMA_INIT_CKPT="/workspace/$CKPT"
 
 echo ">>> $NAME on GPU $GPU"
 echo "    checkpoint : $CKPT"
@@ -63,11 +62,10 @@ echo "    log        : ../docker_data/logs/$NAME.log"
 # Exporting alone is not enough: compose only passes what is listed in the
 # service environment or given with -e, so all four runs silently fell back to
 # the same runs/tensorboard directory and overwrote each other's CSVs.
-exec docker compose run --rm -e WMA_RUN_NAME -e WMA_BASE_CKPT wma-shell \
+exec docker compose run --rm -e WMA_RUN_NAME -e WMA_BASE_CKPT -e WMA_INIT_CKPT wma-shell \
     python scripts/trainer.py --train \
         --base "$CONFIG" \
         --name "$NAME" \
-        $RESUME_ARG \
         --logdir /docker_data/runs \
         --seed "$SEED" \
         --devices 1 --total_gpus=1 \
