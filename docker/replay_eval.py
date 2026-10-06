@@ -281,7 +281,15 @@ def main():
     # the print above referencing an unbound local - a mistake that killed the
     # obs4 sweeps and a teacher-forcing run while reporting nothing but a
     # sweep "done".
-    n_obs = int(model.n_obs_steps)
+    # The model stores n_obs_steps_imagen / n_obs_steps_acting; there is no bare
+    # n_obs_steps. agent_state_pos_emb is sized n_obs_steps_imagen, so that is the
+    # width of the state window we must send. Resolved from the source rather than
+    # guessed - two guesses in a row cost more time than reading it takes.
+    if not hasattr(model, "n_obs_steps_imagen"):
+        raise AttributeError(
+            "model has no n_obs_steps_imagen; expected LatentVisualDiffusion "
+            "to expose it (it sizes agent_state_pos_emb)")
+    n_obs = int(model.n_obs_steps_imagen)
     print(f"  episode: {T} frames, observation history n_obs={n_obs}", flush=True)
 
     from decord import VideoReader, cpu
