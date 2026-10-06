@@ -75,9 +75,23 @@ class RunRecorder(pl.Callback):
 
     # ------------------------------------------------------------------ setup
     def _resolve(self, trainer):
-        name = self.tag or getattr(trainer, "logdir", None) or "run"
-        # PL's logdir is <logdir>/<name>; use just <name> so paths stay short.
-        name = os.path.basename(str(name).rstrip("/")) or "run"
+        """Work out a unique, human-meaningful directory for this run.
+
+        PL's trainer.logdir is the LOGGER's directory, which for the default
+        TensorBoardLogger is <workdir>/tensorboard - using it directly would
+        make every run write to the same "tensorboard" folder. init_workspace
+        (utils/train.py:13-17) puts the run name one level up, so prefer that,
+        then an explicit WMA_RUN_NAME override.
+        """
+        logdir = str(getattr(trainer, "logdir", "") or "").rstrip("/")
+        candidates = [
+            os.environ.get("WMA_RUN_NAME"),
+            os.path.basename(os.path.dirname(logdir)) if logdir else None,
+            os.path.basename(logdir) if logdir else None,
+            getattr(trainer, "default_hp", {}).get("run_name") if hasattr(trainer, "default_hp") else None,
+            "run",
+        ]
+        name = next((c for c in candidates if c), "run")
         d = os.path.join(self.out_dir, name)
         os.makedirs(d, exist_ok=True)
         return d, name
