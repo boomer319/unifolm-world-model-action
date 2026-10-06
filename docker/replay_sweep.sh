@@ -15,19 +15,22 @@ STEPS=("$@")
 
 REPO=/data/docker-services/world_action_models/unifolm_wma
 EXP=/experiments/unifolm_wma
-CKPT_DIR="$REPO/docker_data/runs/$RUN/checkpoints/trainstep_checkpoints"
+CKPT_DIR="$REPO/docker_data/runs/$RUN/checkpoints"
 
 cd "$REPO/docker"
 
 if [ ${#STEPS[@]} -eq 0 ]; then
-  # step=1000.ckpt -> 1000, sorted numerically
-  mapfile -t STEPS < <(ls "$CKPT_DIR" | sed -n 's/^step=\([0-9]*\)\.ckpt$/\1/p' | sort -n)
+  # PL names these epoch=N-step=M.ckpt; we want the step, sorted numerically.
+  # (The sibling trainstep_checkpoints/ dir is empty in our runs, which is why
+  # a first attempt that looked there reported "0 checkpoints".)
+  mapfile -t STEPS < <(ls "$CKPT_DIR" 2>/dev/null \
+    | sed -n 's/^epoch=[0-9]*-step=\([0-9]*\)\.ckpt$/\1/p' | sort -n)
 fi
 
 echo "=== replay sweep: $RUN on GPU $GPU, ${#STEPS[@]} checkpoints ==="
 for STEP in "${STEPS[@]}"; do
-  CKPT="$CKPT_DIR/step=$STEP.ckpt"
-  [ -f "$CKPT" ] || { echo "  step $STEP: MISSING, skipped"; continue; }
+  CKPT=$(ls "$CKPT_DIR"/epoch=*-step="$STEP".ckpt 2>/dev/null | head -1)
+  [ -n "$CKPT" ] || { echo "  step $STEP: MISSING, skipped"; continue; }
   OUT="$EXP/replay/$RUN/step$STEP"
   if [ -f "$OUT/summary.json" ]; then
     echo "  step $STEP: already done, skipped"
