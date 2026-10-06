@@ -57,6 +57,9 @@ def parse_args():
     p.add_argument("--width", type=int, default=512)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--out", required=True)
+    p.add_argument("--teacher-force", action="store_true",
+                   help="feed the action head the true next frames in place of "
+                        "the last observed ones, paired against the normal path")
     p.add_argument("--dump-video", action="store_true",
                    help="write the world's generated video per anchor as mp4")
     p.add_argument("--frame-stride", type=int, default=2,
@@ -126,6 +129,38 @@ def main():
     model = model.to(device).eval()
     print(f"  loaded in {time.time()-t0:.0f}s on {device}", flush=True)
 
+    # ---------------------------------------------------------------------
+    # Teacher forcing.
+    #
+    # The action head has TWO visual pathways (ConditionalUnet1D.forward takes
+    # imagen_cond, the world model's UNet features, AND cond["image"], the raw
+    # observation frames). Wrapping action_unet.forward and substituting only
+    # cond[0] gives the head the true next frames while leaving the world model,
+    # its sampling loop and the KV/cache path completely untouched. That is a
+    # far cleaner instrument than the equivalent test on DreamZero, where
+    # video and action share one DiT and teacher forcing had to be cut into the
+    # denoising loop.
+    #
+    # If actions improve markedly, the head can map visuals to actions and the
+    # limit is what it can observe at inference. If they do not, the head never
+    # learned the mapping.
+    # ---------------------------------------------------------------------
+    _orig_head_forward = None
+    if a.teacher_force:
+        head = model.model.action_unet
+        _orig_head_forward = head.forward
+
+        def _tf_forward(sample, timestep, imagen_cond=None, cond=None, **kw):
+            if cond is not None and _TF_FRAMES.get("x") is not None:
+                cond = [_TF_FRAMES["x"], cond[1]]      # images -> GT, state kept
+            return _orig_head_forward(sample, timestep, imagen_cond, cond, **kw)
+
+        head.forward = _tf_forward
+        print("  teacher forcing: action head will see the true next frames",
+              flush=True)
+
+    _TF_FRAMES = {"x": None}
+
     # The test dataset gives us the exact preprocessing the server uses, plus the
     # min/max statistics that were fitted on THIS data.
     data = instantiate_from_config(cfg.data)
@@ -173,7 +208,7 @@ def main():
     channels = model.model.diffusion_model.out_channels
     noise_shape = [1, channels, a.horizon, h, w]
 
-    preds, gts, anchors_state = [], [], []
+    preds, preds_tf, gts, anchors_state = [], [], [], []
     per_anchor = []
     for t in anchors:
         t0 = time.time()
@@ -195,16 +230,34 @@ def main():
                        'observation.state': st,
                        'action': ph}
 
-        torch.manual_seed(a.seed + t)      # reproducible diffusion noise per anchor
-        with torch.no_grad():
-            vid, act, _ = igs(model, "placeholder", observation, noise_shape,
-                              ddim_steps=a.ddim_steps, ddim_eta=1.0,
-                              unconditional_guidance_scale=1.0,
-                              fs=30 / 2, timestep_spacing="uniform_trailing",
-                              guidance_rescale=0.7)
-        act = act[..., mask[0] == 1.0][0].cpu()
-        act = dset.unnormalizer({'action': act})['action'].numpy().astype(np.float32)
+        def _run(tag=""):
+            torch.manual_seed(a.seed + t)   # same noise for both paths
+            with torch.no_grad():
+                v, ac, _ = igs(model, "placeholder", observation, noise_shape,
+                               ddim_steps=a.ddim_steps, ddim_eta=1.0,
+                               unconditional_guidance_scale=1.0,
+                               fs=30 / 2, timestep_spacing="uniform_trailing",
+                               guidance_rescale=0.7)
+            ac = ac[..., mask[0] == 1.0][0].cpu()
+            return v, dset.unnormalizer({'action': ac})['action'].numpy().astype(np.float32)
 
+        gt_for_tf = None
+        if a.teacher_force:
+            # The next two true frames, in the head's (B, C, T, H, W) layout.
+            fut = vr.get_batch([t + a.frame_stride * i
+                                for i in range(model.model.n_obs_steps_acting)]
+                              ).asnumpy()
+            ft = dset.spatial_transform(
+                torch.tensor(np.transpose(fut, (0, 3, 1, 2)))).to(device)
+            ft = (ft / 255 - 0.5) * 2
+            gt_for_tf = ft.permute(1, 0, 2, 3).unsqueeze(0)   # (1,C,T,H,W)
+
+        vid, act = _run("normal")
+        act_tf = None
+        if a.teacher_force:
+            _TF_FRAMES["x"] = gt_for_tf
+            _, act_tf = _run("tf")
+            _TF_FRAMES["x"] = None
         gt = gt_actions[t:t + a.horizon]
 
         # The video branch is trained jointly with the action branch, so it is a
@@ -253,6 +306,13 @@ def main():
 
         m = metrics(act, gt, gt_states[t])
         m.update(vm)
+        if act_tf is not None:
+            mtf = metrics(act_tf, gt, gt_states[t])
+            m["tf_mae"] = mtf["mae"]
+            m["tf_delta_pred"] = mtf["delta_pred"]
+            m["tf_ratio_vs_baseline"] = mtf["ratio_vs_baseline"]
+            m["tf_corr"] = mtf["corr"]
+            preds_tf.append(act_tf)
         m["anchor"] = int(t)
         m["seconds"] = round(time.time() - t0, 2)
         per_anchor.append(m)
@@ -266,7 +326,8 @@ def main():
     agg = {}
     for k in ("mae", "mae_no_motion", "ratio_vs_baseline", "delta_pred",
               "delta_gt", "delta_ratio", "corr", "endpoint",
-              "video_psnr", "video_mae_px"):
+              "video_psnr", "video_mae_px",
+              "tf_mae", "tf_ratio_vs_baseline", "tf_delta_pred", "tf_corr"):
         vals = [m[k] for m in per_anchor if not np.isnan(m[k])]
         agg[k] = float(np.mean(vals)) if vals else float("nan")
         agg[k + "_std"] = float(np.std(vals)) if vals else float("nan")
@@ -290,7 +351,9 @@ def main():
         json.dump(summary, f, indent=2)
     np.savez_compressed(
         os.path.join(a.out, "replay.npz"),
-        pred=np.stack(preds), gt=np.stack(gts),
+        pred=np.stack(preds),
+        pred_tf=(np.stack(preds_tf) if preds_tf else np.zeros(0)),
+        gt=np.stack(gts),
         anchors=np.array([m["anchor"] for m in per_anchor]),
         anchor_states=np.stack(anchors_state))
 
@@ -302,6 +365,12 @@ def main():
     print(f"  correlation      {agg['corr']:+.4f}")
     print(f"  video PSNR       {agg['video_psnr']:.2f} dB"
           f"  (pixel MAE {agg['video_mae_px']:.2f})")
+    if preds_tf:
+        print(f"  TEACHER FORCED   MAE {agg['tf_mae']:.4f}"
+              f" (baseline {agg['mae_no_motion']:.4f},"
+              f" ratio {agg['tf_ratio_vs_baseline']:.3f})"
+              f"  delta {agg['tf_delta_pred']:.4f}"
+              f"  corr {agg['tf_corr']:+.4f}")
     print(f"  verdict          beats_no_motion={summary['verdict']['beats_no_motion_baseline']}"
           f"  delta_within_5x_of_gt={summary['verdict']['delta_within_5x_of_gt']}")
     print(f"  wrote {a.out}")
