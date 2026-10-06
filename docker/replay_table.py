@@ -101,8 +101,12 @@ def main():
         print(f"\nwrote {a.md}")
     if a.csv:
         import csv
+        # The markdown header carries display labels ("x baseline"), while the
+        # rows carry raw metric keys ("ratio_vs_baseline"), so the CSV needs its
+        # own fieldnames or DictWriter rejects every row.
+        csv_fields = ["run", "ckpt", "step"] + [k for k, _, _ in COLS]
         with open(a.csv, "w", newline="") as fh:
-            w = csv.DictWriter(fh, fieldnames=header)
+            w = csv.DictWriter(fh, fieldnames=csv_fields)
             w.writeheader()
             w.writerows(rows)
         print(f"wrote {a.csv}")
