@@ -1,0 +1,366 @@
+# 10-episode variant of config_g1_dex3.yaml.
+#
+# Identical to the 1-episode config except for the dataset: the experiment varies
+# DATA DIVERSITY at FIXED COMPUTE (same 10 000 updates, same LR schedule, same
+# code), so nothing else may change. Two places reference the dataset name and
+# both are updated:
+#   1. data.params.dataset_and_weights - the sampler weights. These must sum to
+#      1.0 (utils/data.py asserts it), so a command-line override that ADDED a
+#      second key would give 2.0 and trip the assert; that is why this is a file
+#      variant rather than a dotlist override.
+#   2. the RunRecorder's dataset_name, so the manifest hashes the right CSV and
+#      h5 files.
+#
+# batch_size stays 1: at batch 1 a run already uses 56.5 GB of the 79.2 GB card,
+# leaving ~9 GB of activation headroom, so batch 2 would be an OOM gamble.
+
+# G1 Dex3 (28-DoF) training config for UnifoLM-WMA.
+#
+# Derived from configs/train/config.yaml (upstream, 16-DoF). Every deviation is
+# listed at the bottom of this header. Nothing outside the marked lines is
+# changed, so a diff against upstream stays readable.
+#
+# Deviations from upstream configs/train/config.yaml:
+#   1. pretrained_checkpoint -> the released Base checkpoint (Open-X finetune).
+#   2. agent_state_dim / agent_action_dim: 16 -> 28. Omegaconf interpolation
+#      propagates this to unet_head_config.input_dim, max_action_dim,
+#      max_state_dim and normalization_config.input/output_shapes.
+#      NOTE: the released Base checkpoint is a 16-DoF model, so the action and
+#      state UNet input projections change shape and CANNOT be loaded from it.
+#      Use docker/load_test.py, which drops and reports exactly those tensors.
+#   3. obs_encoder_config.params.shape_meta_path: the constructor defaults to
+#      os.getcwd()/configs/train/meta.json (multi_image_obs_encoder.py:44-45), so
+#      the 28-DoF shape spec has to be pointed at explicitly. The path is
+#      resolved relative to the CWD, which compose sets to /workspace.
+#   4. batch_size 8 -> 1. DataModuleFromConfig builds a WeightedRandomSampler
+#      with drop_last=True (utils/data.py:165-168) and WMAData's length is the
+#      CSV row count, which is one row per (episode, view). A 1-episode dataset
+#      therefore yields exactly ONE row and batch_size must be 1 or the loader
+#      produces zero batches.
+#   5. accumulate_grad_batches 2 -> 4, so the effective batch stays 4 as
+#      upstream intended (1 x 4 = 4 vs upstream 8 x 2 = 16; a 1-GPU run cannot
+#      reach 16 without a 16-row dataset).
+#   6. num_workers 12 -> 4 (one CSV row means extra workers only duplicate it).
+#   7. max_steps 300000 -> 10000 (a 1-episode overfit converges far earlier; the
+#      exact value is a Phase-1 decision, this is only a sane default).
+#   8. lightning.trainer.devices / num_nodes / strategy are set explicitly.
+#      Upstream omits devices and num_nodes and relies on scripts/train.sh
+#      passing them on the command line, but trainer.py:123-124 dereferences
+#      both unconditionally. strategy defaults to DDPShardedStrategy
+#      (utils/train.py:139-151), which REQUIRES more than one GPU, so a
+#      single-GPU run must override it - "auto" resolves to SingleDevice.
+#   9. Checkpointing every 500 steps keeping all of them: the overfit study
+#      compares checkpoints, and save_weights_only means no optimizer state.
+#      Budget: the full model is ~27 GB in fp32, so 10000 steps = 20 ckpts =
+#      ~540 GB. .240 had 2.1 TB free at setup time.
+model:
+  pretrained_checkpoint: ./checkpoints/unifolm_wma_base.ckpt
+  base_learning_rate: 1.0e-05
+  scale_lr: False
+  target: unifolm_wma.models.ddpms.LatentVisualDiffusion
+  params:
+    rescale_betas_zero_snr: True
+    parameterization: "v"
+    linear_start: 0.00085
+    linear_end: 0.012
+    num_timesteps_cond: 1
+    log_every_t: 200
+    timesteps: 1000
+    first_stage_key: video
+    cond_stage_key: instruction
+    cond_stage_trainable: False
+    image_proj_model_trainable: True
+    conditioning_key: hybrid
+    image_size: [40, 64]
+    channels: 4
+    scale_by_std: False
+    scale_factor: 0.18215
+    use_ema: False
+    uncond_prob: 0.05
+    uncond_type: 'empty_seq'
+    rand_cond_frame: false
+    use_dynamic_rescale: true
+    base_scale: 0.7
+    fps_condition_type: 'fps'
+    perframe_ae: True
+    freeze_embedder: True
+    n_obs_steps_imagen: 2
+    n_obs_steps_acting: 2
+    agent_state_dim: 28            # DEVIATION 2 (was 16)
+    agent_action_dim: 28           # DEVIATION 2 (was 16)
+    decision_making_only: True
+
+    ###################### DP Related
+    input_pertub: 0.1
+    lr_scheduler: cosine
+    lr_warmup_steps: 2000
+    num_epochs: 60000
+    gradient_accumulate_every: 1
+    use_scheduler: True
+    dp_use_ema: True
+
+    dp_ema_config:
+      target: unifolm_wma.models.diffusion_head.ema_model.EMAModel
+      params:
+        update_after_step: 0
+        inv_gamma: 1.0
+        power: 0.75
+        min_value: 0.0
+        max_value: 0.9999
+
+    noise_scheduler_config:
+      target: diffusers.DDIMScheduler
+      params:
+        num_train_timesteps: 1000
+        beta_start: 0.0001
+        beta_end: 0.02
+        beta_schedule: squaredcos_cap_v2
+        clip_sample: True
+        set_alpha_to_one: True
+        steps_offset: 0
+        prediction_type: epsilon
+
+    dp_optimizer_config:
+      target: torch.optim.AdamW
+      params:
+        lr: 1.0e-4
+        betas: [0.95, 0.999]
+        eps: 1.0e-8
+        weight_decay: 1.0e-6
+
+    wma_config:
+      target: unifolm_wma.modules.networks.wma_model.WMAModel
+      params:
+        in_channels: 8
+        out_channels: 4
+        model_channels: 320
+        attention_resolutions:
+        - 4
+        - 2
+        - 1
+        num_res_blocks: 2
+        channel_mult:
+        - 1
+        - 2
+        - 4
+        - 4
+        dropout: 0.1
+        num_head_channels: 64
+        transformer_depth: 1
+        context_dim: 1024
+        use_linear: true
+        use_checkpoint: True
+        temporal_conv: True
+        temporal_attention: True
+        temporal_selfatt_only: True
+        use_relative_position: False
+        use_causal_attention: False
+        temporal_length: 16
+        addition_attention: True
+        image_cross_attention: True
+        default_fs: 10
+        fs_condition: True
+        cross_attention_scale_learnable: False
+        n_obs_steps: ${model.params.n_obs_steps_imagen}
+        num_stem_token: 16
+        base_model_gen_only: False
+
+        unet_head_config:
+          target: unifolm_wma.models.diffusion_head.conditional_unet1d.ConditionalUnet1D
+          params:
+            input_dim: ${model.params.agent_action_dim}
+            n_obs_steps: ${model.params.n_obs_steps_acting}
+            diffusion_step_embed_dim: 128
+            down_dims: [256, 512, 1024, 2048]
+            kernel_size: 5
+            n_groups: 8
+            cond_predict_scale: True
+            num_head_channels: ${model.params.wma_config.params.num_head_channels}
+            horizon: ${model.params.wma_config.params.temporal_length}
+            use_linear_attn: ${model.params.wma_config.params.use_linear}
+            use_linear_act_proj: True
+            act_proj_dim: 32
+            cond_cross_attention: False
+            context_dims: []
+            image_size: ${model.params.image_size}
+            imagen_cond_gradient: True
+            last_frame_only: False
+            use_imagen_mid_only: False
+            use_z_only: False
+
+            obs_encoder_config:
+              target: unifolm_wma.models.diffusion_head.vision.multi_image_obs_encoder.MultiImageObsEncoder
+              params:
+                rgb_model_config:
+                  target: unifolm_wma.models.diffusion_head.vision.model_getter.get_resnet
+                  params:
+                    name: resnet18
+                    weights: null
+                shape_meta_path: configs/train/meta_g1_dex3.json   # DEVIATION 3
+                resize_shape: null
+                crop_shape: null
+                random_crop: False
+                use_group_norm: True
+                share_rgb_model: False
+                imagenet_norm: True
+                use_spatial_softmax: True
+                spatial_softmax_kp: 128
+
+        ###################### Action Tokenization
+        stem_process_config:
+          target: unifolm_wma.modules.encoders.condition.SATokenProjector
+          params:
+            dim: 1024
+            depth: 1
+            dim_head: 64
+            heads: 16
+            num_queries: ${model.params.wma_config.params.num_stem_token}
+            output_dim: 1024
+            ff_mult: 4
+            chunk_size: ${model.params.wma_config.params.temporal_length}
+
+    first_stage_config:
+      target: unifolm_wma.models.autoencoder.AutoencoderKL
+      params:
+        embed_dim: 4
+        monitor: val/rec_loss
+        ddconfig:
+          double_z: True
+          z_channels: 4
+          resolution: 256
+          in_channels: 3
+          out_ch: 3
+          ch: 128
+          ch_mult:
+          - 1
+          - 2
+          - 4
+          - 4
+          num_res_blocks: 2
+          attn_resolutions: []
+          dropout: 0.0
+        lossconfig:
+          target: torch.nn.Identity
+
+    cond_stage_config:
+      target: unifolm_wma.modules.encoders.condition.FrozenOpenCLIPEmbedder
+      params:
+        freeze: True
+        layer: "penultimate"
+
+    img_cond_stage_config:
+      target: unifolm_wma.modules.encoders.condition.FrozenOpenCLIPImageEmbedderV2
+      params:
+        freeze: true
+
+    image_proj_stage_config:
+      target: unifolm_wma.modules.encoders.resampler.Resampler
+      params:
+        dim: 1024
+        depth: 4
+        dim_head: 64
+        heads: 12
+        num_queries: 16
+        embedding_dim: 1280
+        output_dim: 1024
+        ff_mult: 4
+        video_length: ${model.params.wma_config.params.temporal_length}
+
+  normalization_config:
+    input_shapes:
+      observation.state: ${model.params.wma_config.params.unet_head_config.params.input_dim}
+    input_normalization_modes:
+      observation.state: 'min_max'
+    output_shapes:
+      action: ${model.params.wma_config.params.unet_head_config.params.input_dim}
+    output_normalization_modes:
+      action: 'min_max'
+
+data:
+  target: unifolm_wma.utils.data.DataModuleFromConfig
+  params:
+    batch_size: 1                  # DEVIATION 4 (was 8)
+    num_workers: 4                 # DEVIATION 6 (was 12)
+    wrap: False
+    train:
+      target: unifolm_wma.data.wma_data.WMAData
+      params:
+        data_dir: '/data_wma'
+        video_length: ${model.params.wma_config.params.temporal_length}
+        frame_stride: 2
+        load_raw_resolution: True
+        resolution: [320, 512]
+        spatial_transform: resize_center_crop
+        crop_resolution: [320, 512]
+        random_fs: False
+        cond_robot_label_prob: 0.0
+        normalization_mode: 'min_max'
+        individual_normalization: True
+        n_obs_steps: ${model.params.n_obs_steps_imagen}
+        max_action_dim: ${model.params.agent_action_dim}
+        max_state_dim: ${model.params.agent_state_dim}
+    dataset_and_weights:
+      g1_dex3_graspsquare_10ep: 1.0
+
+lightning:
+  precision: 16
+  # DEVIATION 8: upstream leaves these to scripts/train.sh; trainer.py
+  # dereferences devices/num_nodes unconditionally and the default strategy is
+  # DDPShardedStrategy, which needs >1 GPU.
+  strategy: auto
+  trainer:
+    num_nodes: 1
+    devices: 1
+    benchmark: True
+    accumulate_grad_batches: 4     # DEVIATION 5 (was 2)
+    max_steps: 10000               # DEVIATION 7 (was 300000)
+    log_every_n_steps: 50
+    val_check_interval: 1.0
+    gradient_clip_algorithm: 'norm'
+    gradient_clip_val: 0.5
+    enable_model_summary: False
+  callbacks:
+    # Thesis provenance: per-run manifest.json (git SHA, resolved config hash,
+    # dataset file hashes, base checkpoint identity, GPU, versions, parameter
+    # counts), metrics.csv at optimizer-step resolution, and summary.json with
+    # timing and peak memory. Lives in our own package so upstream src/ is
+    # untouched.
+    run_recorder:
+      target: unifolm_wma_ext.callbacks.RunRecorder
+      params:
+        out_dir: /docker_data/runs
+        config: /workspace/configs/train/config_g1_dex3.yaml
+        data_dir: /data_wma
+        # Left empty on purpose: the run may load a different checkpoint than
+        # model.pretrained_checkpoint (wma-verify-dual overrides it on the
+        # command line), and OmegaConf 2.3 supports neither a relative
+        # ${model...} from a nested node nor the absolute ${$.model...} form.
+        # WMA_BASE_CKPT in the environment takes precedence; otherwise the
+        # recorder falls back to reading model.pretrained_checkpoint from the
+        # saved config next to the run.
+        base_ckpt: ""
+        dataset_name: g1_dex3_graspsquare_10ep
+    model_checkpoint:
+      target: pytorch_lightning.callbacks.ModelCheckpoint
+      params:
+        every_n_train_steps: 500   # DEVIATION 9 (was 1000)
+        save_top_k: -1             # DEVIATION 9: keep every checkpoint
+        filename: "{epoch}-{step}"
+        save_weights_only: True
+    metrics_over_trainsteps_checkpoint:
+      target: pytorch_lightning.callbacks.ModelCheckpoint
+      params:
+        filename: '{epoch}-{step}'
+        save_weights_only: True
+        every_n_train_steps: 10000
+    batch_logger:
+      target: unifolm_wma.utils.callbacks.ImageLogger
+      params:
+        batch_frequency: 20000
+        to_local: False
+        max_images: 8
+        log_images_kwargs:
+          ddim_steps: 16
+          unconditional_guidance_scale: 1.0
+          timestep_spacing: uniform_trailing
+          guidance_rescale: 0.7
