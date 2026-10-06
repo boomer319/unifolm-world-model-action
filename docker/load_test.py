@@ -36,7 +36,9 @@ from omegaconf import OmegaConf
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--config", required=True)
-    p.add_argument("--ckpt", required=True)
+    p.add_argument("--ckpt", default=None,
+                   help="checkpoint to load; omit to only instantiate the model "
+                        "and report parameter counts and GPU memory")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--precision", type=int, default=32, choices=[16, 32],
                    help="16 loads weights in fp16 (halves the 27 GB ckpt to 13.5 GB)")
@@ -107,30 +109,39 @@ def main():
     print("=" * 70)
     print(" read checkpoint")
     print("=" * 70)
-    if not os.path.exists(args.ckpt):
-        print(f"  ERROR: checkpoint not found: {args.ckpt}")
-        print("  Download it first (see docker/README.md, step 'checkpoints').")
-        sys.exit(2)
-    sd, how = load_sd(args.ckpt)
-    print(f"  {args.ckpt}")
-    print(f"  format: {how}, {len(sd)} tensors, "
-          f"{os.path.getsize(args.ckpt)/2**30:.2f} GiB on disk")
-    if args.precision == 16:
-        sd = {k: (v.half() if v.is_floating_point() else v) for k, v in sd.items()}
-        print("  converted checkpoint tensors to fp16")
+    if args.ckpt is None:
+        print("  --ckpt omitted: skipping the checkpoint diff and load.")
+        print("  This still validates that the 28-DoF config builds, and reports")
+        print("  parameter counts and GPU memory.")
+    else:
+        if not os.path.exists(args.ckpt):
+            print(f"  ERROR: checkpoint not found: {args.ckpt}")
+            print("  Download it first (see docker/README.md, 'Checkpoints').")
+            sys.exit(2)
+        sd, how = load_sd(args.ckpt)
+        print(f"  {args.ckpt}")
+        print(f"  format: {how}, {len(sd)} tensors, "
+              f"{os.path.getsize(args.ckpt)/2**30:.2f} GiB on disk")
+        if args.precision == 16:
+            sd = {k: (v.half() if v.is_floating_point() else v) for k, v in sd.items()}
+            print("  converted checkpoint tensors to fp16")
 
     print()
     print("=" * 70)
     print(" diff: checkpoint vs model")
     print("=" * 70)
-    ckpt_keys, model_keys = set(sd), set(msd)
-    missing = sorted(model_keys - ckpt_keys)          # randomly initialised
-    unexpected = sorted(ckpt_keys - model_keys)       # ignored by strict=False
-    mismatched = []
-    for k in sorted(ckpt_keys & model_keys):
-        a, b = sd[k], msd[k]
-        if hasattr(a, "shape") and hasattr(b, "shape") and tuple(a.shape) != tuple(b.shape):
-            mismatched.append((k, tuple(a.shape), tuple(b.shape)))
+    if args.ckpt is None:
+        missing, unexpected, mismatched = [], [], []
+        print("  skipped (no --ckpt)")
+    else:
+        ckpt_keys, model_keys = set(sd), set(msd)
+        missing = sorted(model_keys - ckpt_keys)          # randomly initialised
+        unexpected = sorted(ckpt_keys - model_keys)       # ignored by strict=False
+        mismatched = []
+        for k in sorted(ckpt_keys & model_keys):
+            a, b = sd[k], msd[k]
+            if hasattr(a, "shape") and hasattr(b, "shape") and tuple(a.shape) != tuple(b.shape):
+                mismatched.append((k, tuple(a.shape), tuple(b.shape)))
 
     def show(title, items, fmt=None):
         print(f"\n  {title}: {len(items)}")
@@ -159,32 +170,36 @@ def main():
     print("=" * 70)
     print(" load")
     print("=" * 70)
-    load_sd_filtered = dict(sd)
-    dropped = []
-    if mismatched and not args.strict:
-        for k, a_shape, m_shape in mismatched:
-            load_sd_filtered.pop(k, None)
-            dropped.append(k)
-        print(f"  dropping {len(dropped)} shape-incompatible entries so the "
-              f"16-DoF checkpoint can seed a 28-DoF model:")
-        for k, a_shape, m_shape in mismatched[:args.max_list]:
-            print(f"    {k}: ckpt{a_shape} -> model{m_shape} (random init)")
-        if len(mismatched) > args.max_list:
-            print(f"    ... and {len(mismatched) - args.max_list} more")
-    elif mismatched:
-        print("  --strict: refusing to load, shape mismatches present")
-        sys.exit(3)
+    if args.ckpt is None:
+        load_sd_filtered, still_missing, still_unexpected, dropped = {}, [], [], []
+        print("  skipped (no --ckpt)")
+    else:
+        load_sd_filtered = dict(sd)
+        dropped = []
+        if mismatched and not args.strict:
+            for k, a_shape, m_shape in mismatched:
+                load_sd_filtered.pop(k, None)
+                dropped.append(k)
+            print(f"  dropping {len(dropped)} shape-incompatible entries so the "
+                  f"16-DoF checkpoint can seed a 28-DoF model:")
+            for k, a_shape, m_shape in mismatched[:args.max_list]:
+                print(f"    {k}: ckpt{a_shape} -> model{m_shape} (random init)")
+            if len(mismatched) > args.max_list:
+                print(f"    ... and {len(mismatched) - args.max_list} more")
+        elif mismatched:
+            print("  --strict: refusing to load, shape mismatches present")
+            sys.exit(3)
 
-    result = model.load_state_dict(load_sd_filtered, strict=False)
-    still_missing = list(result.missing_keys)
-    still_unexpected = list(result.unexpected_keys)
-    print(f"  load_state_dict -> missing={len(still_missing)} "
-          f"unexpected={len(still_unexpected)}")
-    if still_missing:
-        random_init = [k for k in still_missing
-                       if k not in {m[0] for m in mismatched}]
-        print(f"  of which {len(random_init)} have no checkpoint counterpart at all "
-              f"(these start random - expected for a DoF change)")
+        result = model.load_state_dict(load_sd_filtered, strict=False)
+        still_missing = list(result.missing_keys)
+        still_unexpected = list(result.unexpected_keys)
+        print(f"  load_state_dict -> missing={len(still_missing)} "
+              f"unexpected={len(still_unexpected)}")
+        if still_missing:
+            random_init = [k for k in still_missing
+                           if k not in {m[0] for m in mismatched}]
+            print(f"  of which {len(random_init)} have no checkpoint counterpart at all "
+                  f"(these start random - expected for a DoF change)")
 
     if args.device == "cuda":
         model = model.to(args.device)
@@ -202,6 +217,7 @@ def main():
         rep = {
             "config": args.config,
             "checkpoint": args.ckpt,
+            "loaded_checkpoint": args.ckpt is not None,
             "ckpt_format": how,
             "agent_state_dim": int(m.params.agent_state_dim),
             "agent_action_dim": int(m.params.agent_action_dim),
