@@ -313,7 +313,10 @@ def main():
                     (0, 3, 1, 2)))).to(device)
             gt_t = (gt_t / 255 - 0.5) * 2
             with torch.no_grad():
-                z_gt = model.encode_first_stage(gt_t.unsqueeze(0))
+                # gt_t is (T, C, H, W); the VAE reads dim 1 as channels, so it
+                # needs (B, C, T, H, W).
+                z_gt = model.encode_first_stage(
+                    gt_t.permute(1, 0, 2, 3).unsqueeze(0))
 
         _TFZ["z"] = z_gt
         vid, act = _run("normal")
