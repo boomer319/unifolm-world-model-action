@@ -189,8 +189,11 @@ def main():
     # ---------------------------------------------------------------------
     _TFZ = {"z": None}
     if a.teacher_force_z:
+        # Class hierarchy, verified rather than assumed:
+        #   DDPM -> LatentDiffusion (encode_first_stage) -> LatentVisualDiffusion
+        # so the outer model carries both encode_first_stage and q_sample;
+        # only the WMAModel that owns action_unet lives under DiffusionWrapper.
         _wm = model.model.diffusion_model
-        _wrap = model.model
         _orig_wm_forward = _wm.forward
 
         def _wm_forward_tf(x, *args, **kw):
@@ -201,7 +204,8 @@ def main():
                     z0 = torch.nn.functional.interpolate(
                         z0, size=x.shape[-3:], mode="nearest")
                 eps = torch.randn_like(x)
-                x = _wrap.q_sample(ts, z0.expand_as(x) if z0.shape[1] == 1 else z0, eps)
+                z0 = z0.expand_as(x) if z0.shape[1] == 1 else z0
+                x = model.q_sample(ts, z0, eps)
                 _TFZ["fired"] = _TFZ.get("fired", 0) + 1
             return _orig_wm_forward(x, *args, **kw)
 
@@ -309,7 +313,7 @@ def main():
                     (0, 3, 1, 2)))).to(device)
             gt_t = (gt_t / 255 - 0.5) * 2
             with torch.no_grad():
-                z_gt = model.model.encode_first_stage(gt_t.unsqueeze(0))
+                z_gt = model.encode_first_stage(gt_t.unsqueeze(0))
 
         _TFZ["z"] = z_gt
         vid, act = _run("normal")
