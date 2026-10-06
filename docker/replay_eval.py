@@ -276,6 +276,12 @@ def main():
         gt_actions = np.array(f["action"][:], dtype=np.float32)
         gt_states = np.array(f["observation.state"][:], dtype=np.float32)
     T = len(gt_actions)
+    # Read the observation-history width from the model BEFORE anything that
+    # mentions it. Defining this further down, next to the anchor bounds, left
+    # the print above referencing an unbound local - a mistake that killed the
+    # obs4 sweeps and a teacher-forcing run while reporting nothing but a
+    # sweep "done".
+    n_obs = int(model.n_obs_steps)
     print(f"  episode: {T} frames, observation history n_obs={n_obs}", flush=True)
 
     from decord import VideoReader, cpu
@@ -286,7 +292,6 @@ def main():
     # comparison, not the actions: at frame_stride 2 the last compared ground
     # truth frame is t + 2*(horizon-1), so an anchor placed for the action chunk
     # alone can run past the end of the episode and decord raises.
-    n_obs = int(model.n_obs_steps)      # observation history the model expects
     lo, hi = max(n_obs - 1, 1), T - a.frame_stride * (a.horizon - 1) - 1
     if hi <= lo:
         raise RuntimeError(
