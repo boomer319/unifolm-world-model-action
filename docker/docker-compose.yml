@@ -75,7 +75,10 @@ x-wma-base: &wma-base
     - /lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1:/nvidia-host/libnvidia-ptxjitcompiler.so.1:ro
     - /lib/x86_64-linux-gnu/libnvidia-ml.so.1:/nvidia-host/libnvidia-ml.so.1:ro
   devices:
-    - /dev/nvidia0:/dev/nvidia0
+    # GPU 0 is the default and the standing rule for .240. WMA_GPU only exists
+    # for the sanctioned multi-GPU exception (independent runs on separate GPUs,
+    # not DDP); with it unset every service still gets GPU 0 only.
+    - /dev/nvidia${WMA_GPU:-0}:/dev/nvidia${WMA_GPU:-0}
     - /dev/nvidiactl:/dev/nvidiactl
     - /dev/nvidia-uvm:/dev/nvidia-uvm
     - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
