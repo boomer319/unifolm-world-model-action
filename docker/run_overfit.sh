@@ -30,12 +30,26 @@ SEED=${4:-20250912}
 STEPS=${5:-10000}
 EVERY=${6:-1000}
 CONFIG=${7:-configs/train/config_g1_dex3.yaml}
+# Optional 8th argument: resume weights from a checkpoint of the same run
+# directory. The action loss was still falling at 10k with no plateau, so the
+# question "undertrained, or a structural floor?" is answered by training on,
+# not by starting a fresh run that would land in the same place within the time
+# budget. Weight-only, because save_weights_only means there is no optimizer
+# state to restore - this starts a fresh LR cycle, which is intended.
+RESUME_FROM=${8:-}
 
 cd "$(dirname "$0")"
 
 export WMA_GPU="$GPU"
 export WMA_RUN_NAME="$NAME"
 export WMA_BASE_CKPT="/workspace/$CKPT"
+
+if [ -n "$RESUME_FROM" ]; then
+  RESUME_ARG="--auto_resume_weight_only $RESUME_FROM"
+  echo "    RESUME     : $RESUME_FROM (weight-only; fresh optimizer)"
+else
+  RESUME_ARG=""
+fi
 
 echo ">>> $NAME on GPU $GPU"
 echo "    checkpoint : $CKPT"
@@ -53,6 +67,7 @@ exec docker compose run --rm -e WMA_RUN_NAME -e WMA_BASE_CKPT wma-shell \
     python scripts/trainer.py --train \
         --base "$CONFIG" \
         --name "$NAME" \
+        $RESUME_ARG \
         --logdir /docker_data/runs \
         --seed "$SEED" \
         --devices 1 --total_gpus=1 \
