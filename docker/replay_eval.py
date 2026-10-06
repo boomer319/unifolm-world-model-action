@@ -276,7 +276,7 @@ def main():
         gt_actions = np.array(f["action"][:], dtype=np.float32)
         gt_states = np.array(f["observation.state"][:], dtype=np.float32)
     T = len(gt_actions)
-    print(f"  episode: {T} frames", flush=True)
+    print(f"  episode: {T} frames, observation history n_obs={n_obs}", flush=True)
 
     from decord import VideoReader, cpu
     vr = VideoReader(os.path.join(a.data_dir, "videos", a.dataset, a.view, "0.mp4"),
@@ -286,7 +286,8 @@ def main():
     # comparison, not the actions: at frame_stride 2 the last compared ground
     # truth frame is t + 2*(horizon-1), so an anchor placed for the action chunk
     # alone can run past the end of the episode and decord raises.
-    lo, hi = 2, T - a.frame_stride * (a.horizon - 1) - 1
+    n_obs = int(model.n_obs_steps)      # observation history the model expects
+    lo, hi = max(n_obs - 1, 1), T - a.frame_stride * (a.horizon - 1) - 1
     if hi <= lo:
         raise RuntimeError(
             f"episode too short for {a.horizon} frames at stride "
@@ -301,12 +302,19 @@ def main():
     per_anchor = []
     for t in anchors:
         t0 = time.time()
-        frames = vr.get_batch([t - 1, t]).asnumpy()          # (2,H,W,C)
+        # Observation history must match what the dataset feeds and how wide the
+        # model expects: wma_data.py takes range(t - n_obs + 1, t + 1), i.e.
+        # CONTIGUOUS frames ending at the anchor, and agent_state_pos_emb is sized
+        # to n_obs. Hardcoding [t-1, t] works for n_obs=2 by coincidence and dies
+        # on the obs4 arms with "size of tensor a (4) must match tensor b (2)".
+        # For n_obs=2 this is identical to what it always was.
+        obs_idx = list(range(t - n_obs + 1, t + 1))
+        frames = vr.get_batch(obs_idx).asnumpy()             # (n_obs,H,W,C)
         img = torch.tensor(np.transpose(frames, (0, 3, 1, 2)))  # (T,C,H,W)
         img = dset.spatial_transform(img).unsqueeze(0).to(device)
         img = (img / 255 - 0.5) * 2                          # server's normalize_image
 
-        st = torch.tensor(np.stack([gt_states[t - 1], gt_states[t]]))
+        st = torch.tensor(np.stack([gt_states[i] for i in obs_idx]))
         st = dset.normalizer({'observation.state': st})['observation.state']
         st, _ = dset._map_to_uni_state(st, "joint position")
         st = st.unsqueeze(0).to(device)
