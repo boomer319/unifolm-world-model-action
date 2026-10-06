@@ -58,6 +58,12 @@ x-wma-base: &wma-base
     WMA_SOURCE_DIR: /datasets
     WMA_DATA_DIR: /data_wma
     LOCAL_RANK: "0"
+    # Per-process thread cap. The host has 192 cores and PyTorch defaults to
+    # using all of them for intra-op parallelism, so several concurrent jobs
+    # thrash instead of working (load average 400, per-checkpoint time 141s ->
+    # 240s). Kept in the base environment so every service inherits it.
+    OMP_NUM_THREADS: "8"
+    MKL_NUM_THREADS: "8"
     RANK: "0"
     WORLD_SIZE: "1"
   volumes:

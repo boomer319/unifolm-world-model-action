@@ -49,8 +49,16 @@ for STEP in "${STEPS[@]}"; do
   echo "  --- step $STEP ---"
   START=$(date +%s)
   STEP_LOG="$LOG_DIR/replay_${RUN}_step${STEP}.log"
-  if WMA_GPU="$GPU" docker compose run --rm --no-deps \
+  # Cap per-process threads. Without this each PyTorch process grabs all 192
+  # cores for intra-op parallelism; five concurrent sweeps drove the load
+  # average to 400 and per-checkpoint time from 141s to 240s, almost all of it
+  # spent thrashing during the 16 GB checkpoint load rather than computing.
+  if WMA_GPU="$GPU" OMP_NUM_THREADS="${THREADS:-8}" \
+     MKL_NUM_THREADS="${THREADS:-8}" \
+     docker compose run --rm --no-deps \
       -e WMA_GPU="$GPU" \
+      -e OMP_NUM_THREADS="${THREADS:-8}" \
+      -e MKL_NUM_THREADS="${THREADS:-8}" \
       wma-shell python docker/replay_eval.py \
       --config configs/train/config_g1_dex3.yaml \
       --ckpt "$CKPT_IN_CONTAINER" \
