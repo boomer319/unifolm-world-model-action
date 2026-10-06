@@ -214,15 +214,26 @@ def main():
                 if z0.shape[-3] != x.shape[-3]:
                     z0 = torch.nn.functional.interpolate(
                         z0, size=x.shape[-3:], mode="nearest")
-                eps = torch.randn_like(x)
-                z0 = z0.expand_as(x) if z0.shape[1] == 1 else z0
+                # x is NOT the bare latent. With conditioning_key='hybrid' the
+                # DiffusionWrapper concatenates the image-conditioning latent
+                # onto the noisy latent before the UNet runs, so x is
+                # [noisy_latent(4) ; img_cond(4)] = 8 channels, which is why the
+                # model declares in_channels: 8. Assigning a 4-channel q_sample
+                # result to all of x is a shape error (4 vs 8). Replace only the
+                # leading block - the noised latent - and keep the conditioning
+                # block, which is ground truth anyway since the observation
+                # frames sent to the server are real.
+                nc = z0.shape[1]
+                eps = torch.randn_like(x[:, :nc])
+                new_x = x.clone()
                 # q_sample's signature is (x_start, t, noise) - x_start FIRST.
-                # Passing (ts, z0, eps) put the float latent where the schedule
-                # index goes, and gather() rejected it with "Expected dtype
-                # int64 for index", which sent me chasing a dtype problem that
-                # was really an argument-order one. Keywords, so the order is
-                # not something to remember. Upstream calls it q_sample(x0, ts).
-                x = model.q_sample(x_start=z0, t=ts, noise=eps)
+                # Passing (ts, z0, eps) positionally put the float latent where
+                # the schedule index goes, and gather() rejected it with
+                # "Expected dtype int64 for index", which looks like a dtype
+                # problem but was an argument-order one. Keywords, so the order
+                # is not something to remember.
+                new_x[:, :nc] = model.q_sample(x_start=z0, t=ts, noise=eps)
+                x = new_x
                 _TFZ["fired"] = _TFZ.get("fired", 0) + 1
             return _orig_wm_forward(x, *args, **kw)
 
