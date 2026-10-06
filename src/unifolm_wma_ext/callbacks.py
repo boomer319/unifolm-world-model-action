@@ -21,6 +21,7 @@ This callback writes, per run, into <out_dir>/<run_name>/:
 Rows are flushed per batch, so a killed run still leaves usable data.
 """
 import csv
+import re
 import hashlib
 import json
 import os
@@ -105,29 +106,55 @@ class RunRecorder(pl.Callback):
                     pass
         return None
 
+    # Directory names pytorch-lightning puts between the run directory and
+    # trainer.logdir: the logger name and the version sub-directory. They must
+    # never be mistaken for the run name - that bug once made four concurrent
+    # runs write into a single "tensorboard" directory.
+    _LOGGER_DIRS = {"tensorboard", "testtube", "csvlogs", "logs", "wandb",
+                    "lightning_logs", "mlruns"}
+
     def _resolve(self, trainer):
         """Work out a unique, human-meaningful directory for this run.
 
-        PL's trainer.logdir is the LOGGER's directory, which for the default
-        TensorBoardLogger is <workdir>/tensorboard - using it directly would
-        make every run write to the same "tensorboard" folder. init_workspace
-        (utils/train.py:13-17) puts the run name one level up, so prefer that,
-        then an explicit WMA_RUN_NAME override.
+        Raises rather than guessing: a wrong name silently merges runs, and the
+        rows carry no run identity, so the data is unrecoverable.
         """
-        candidates = [os.environ.get("WMA_RUN_NAME")]
-        for attr in ("logdir", "log_dir"):
+        name = os.environ.get("WMA_RUN_NAME")
+        if not name:
+            # init_workspace (utils/train.py:13-17) makes the run directory
+            # os.path.join(<logdir>, <--name>), and the logger then appends its
+            # own sub-directory, so trainer.logdir looks like
+            #   <logdir>/<run name>/<logger name>/version_<n>
+            # Strip the logger layers off the bottom to recover the run name.
             try:
-                v = str(getattr(trainer, attr, "") or "").rstrip("/")
+                logdir = str(getattr(trainer, "logdir", "") or "").rstrip("/")
             except Exception:
-                v = ""
-            if v:
-                # PL's logdir is the LOGGER's dir (<workdir>/tensorboard), and
-                # init_workspace puts the run name one level above it.
-                candidates += [os.path.basename(os.path.dirname(v)),
-                               os.path.basename(v)]
-        # A timestamped last resort: two runs must never share a directory.
-        candidates.append("run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
-        name = next((c for c in candidates if c), None)
+                logdir = ""
+            parts = logdir.split("/") if logdir else []
+            while parts and (re.fullmatch(r"version_\d+", parts[-1])
+                             or parts[-1] in self._LOGGER_DIRS):
+                parts.pop()
+            if parts:
+                name = parts[-1]
+        if not name or name in self._LOGGER_DIRS or re.fullmatch(r"version_\d+", name):
+            raise RuntimeError(
+                "RunRecorder could not determine a run directory name. Set "
+                "WMA_RUN_NAME (docker compose run -e WMA_RUN_NAME=<name> ...) "
+                f"; trainer.logdir was {getattr(trainer, 'logdir', None)!r}. "
+                "Refusing to fall back to a shared directory, because rows "
+                "carry no run identity and concurrent runs would overwrite "
+                "each other."
+            )
+        # Stripping logger layers can walk past the run directory entirely (e.g.
+        # /runs/tensorboard/version_0 leaves "runs"). That would nest a stray
+        # directory inside out_dir, so treat it as a failure too.
+        if name == os.path.basename(os.path.abspath(self.out_dir)):
+            raise RuntimeError(
+                f"RunRecorder derived {name!r} from trainer.logdir, which is the "
+                f"output directory itself rather than a run name. Set "
+                f"WMA_RUN_NAME; trainer.logdir was "
+                f"{getattr(trainer, 'logdir', None)!r}."
+            )
         d = os.path.join(self.out_dir, name)
         os.makedirs(d, exist_ok=True)
         return d, name
