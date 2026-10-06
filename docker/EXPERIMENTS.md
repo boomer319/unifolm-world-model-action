@@ -74,10 +74,18 @@ on Unitree data. Crossing that with two seeds is what makes a difference
 readable as signal rather than noise.
 
 **10-episode arm**, `overfit_dual_10ep_s20250912` on GPU 5: same checkpoint, same
-seed, same 10 000 updates, but ten episodes. This isolates **data diversity at
-fixed compute** — ten episodes get ~1000 passes each instead of 10 000 — and asks
-whether breadth or repetition is what a world-action model needs in order to
-track.
+seed, same 10 000 updates, but ten episodes instead of one. Episodes 0-9 of
+GraspSquare, which has 301 episodes but **exactly one task string**.
+
+It is therefore a **trajectory-density** ablation, not a diversity one: it raises
+the window count from 1 173 to ~11 730 at fixed compute, so each episode gets
+~1 000 passes instead of 10 000. What varies is initial condition, object
+placement jitter and which trajectory sample of the behaviour; the task, the
+objects, the scene, the instruction and the camera are identical.
+
+Testing genuine diversity needs the other tasks in AllMerged (BlockStacking,
+ObjectPlacement, CameraPackaging) — different scenes and instructions — which is
+the axis that probes generalisation rather than sample count.
 
 ## Reproducing
 
