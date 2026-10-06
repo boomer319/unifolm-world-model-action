@@ -100,15 +100,20 @@ RUN pip install "setuptools<81" pytorch-lightning==1.9.5
 # --- dependencies upstream OMITS from pyproject.toml but the code imports ----
 #   h5py         src/unifolm_wma/data/wma_data.py:5, prepare_data/*.py
 #   safetensors  src/unifolm_wma/data/utils.py:6 (load_stats), prepare_data
+#   pyarrow      prepare_data/prepare_training_data.py:118 reads the LeRobot v2
+#                parquet through pandas, which needs a parquet engine. Upstream
+#                only gets pyarrow transitively through `datasets`, which is
+#                itself unused by the training and serving paths.
 #   sentencepiece modules/encoders/condition.py:75 uses T5Tokenizer (slow,
 #                sentencepiece-backed, not the HF-fast variant)
 #   fastapi/uvicorn/matplotlib  scripts/evaluation/real_eval_server.py:6,10,17
-#   tensorboard   utils/train.py:130 defaults the logger to TensorBoardLogger
-#                 and configs/train/config.yaml sets no logger
+#   tensorboard  utils/train.py:130 defaults the logger to TensorBoardLogger
+#                and configs/train/config.yaml sets no logger
 RUN pip install \
     fastapi \
     h5py \
     matplotlib \
+    pyarrow \
     safetensors \
     sentencepiece \
     tensorboard \

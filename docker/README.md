@@ -100,7 +100,9 @@ the constraint stays self-verifying.
 `sentencepiece` (condition.py:75 uses the slow `T5Tokenizer`),
 `fastapi` + `uvicorn` + `matplotlib` (real_eval_server.py), `tensorboard`
 (`utils/train.py:130` defaults to `TensorBoardLogger` and the training config
-sets no logger).
+sets no logger), and `pyarrow` (`prepare_training_data.py:118` reads the
+LeRobot v2 parquet through pandas; upstream only gets pyarrow transitively via
+`datasets`, which is itself unused).
 
 **6. Dependencies dropped** because nothing under `src/`, `scripts/` or
 `prepare_data/` imports them: `gradio`, `tensorflow-metadata`,
