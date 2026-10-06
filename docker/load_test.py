@@ -150,13 +150,14 @@ def main():
         if len(items) > args.max_list:
             print(f"    ... and {len(items) - args.max_list} more")
 
-    show("missing (model tensor with NO checkpoint entry -> random init)",
-         missing)
-    show("unexpected (checkpoint entry with no model tensor -> dropped)",
-         unexpected)
-    show("shape-mismatched (same name, different shape -> raises even with strict=False)",
-         mismatched,
-         fmt=lambda t: f"{t[0]}: ckpt{t[1]} vs model{t[2]}")
+    if args.ckpt is not None:
+        show("missing (model tensor with NO checkpoint entry -> random init)",
+             missing)
+        show("unexpected (checkpoint entry with no model tensor -> dropped)",
+             unexpected)
+        show("shape-mismatched (same name, different shape -> raises even with strict=False)",
+             mismatched,
+             fmt=lambda t: f"{t[0]}: ckpt{t[1]} vs model{t[2]}")
 
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total = sum(p.numel() for p in model.parameters())
@@ -218,7 +219,7 @@ def main():
             "config": args.config,
             "checkpoint": args.ckpt,
             "loaded_checkpoint": args.ckpt is not None,
-            "ckpt_format": how,
+            "ckpt_format": how if args.ckpt is not None else None,
             "agent_state_dim": int(m.params.agent_state_dim),
             "agent_action_dim": int(m.params.agent_action_dim),
             "model_tensors": len(msd),
