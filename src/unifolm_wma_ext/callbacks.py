@@ -76,6 +76,7 @@ class RunRecorder(pl.Callback):
         self._t0 = None
         self._updates = 0
         self._batches = 0
+        self._observed_batches = 0
 
     # ------------------------------------------------------------------ setup
     def _base_ckpt(self, trainer):
@@ -185,7 +186,12 @@ class RunRecorder(pl.Callback):
             },
             "trainer": {
                 "max_steps": trainer.max_steps,
+                # Reported as configured AND as the strategy resolved it: with
+                # this config the trainer reports 4 but the observed rows show
+                # 1 batch per weight update, so the effective batch is 1 sample.
                 "accumulate_grad_batches": trainer.accumulate_grad_batches,
+                "strategy_accumulate_grad_batches":
+                    getattr(trainer.strategy, "accumulate_grad_batches", None),
                 "precision": trainer.precision,
                 "strategy": str(trainer.strategy),
                 "num_devices": getattr(trainer, "num_devices", None),
@@ -274,6 +280,7 @@ class RunRecorder(pl.Callback):
                                   + ["m_" + k for k in self._keys])
         self._updates += 1
         in_window = self._batches
+        self._observed_batches += in_window
         self._batches = 0
         row = [self._updates, trainer.global_step, trainer.current_epoch,
                in_window, round(time.time() - self._t0, 2),
@@ -296,6 +303,9 @@ class RunRecorder(pl.Callback):
             "global_step": trainer.global_step,
             "weight_updates": self._updates,
             "batches": self._updates * trainer.accumulate_grad_batches,
+            "observed_batches_per_update": (
+                self._observed_batches / self._updates
+                if self._updates and self._observed_batches else None),
             "peak_gpu_GiB": round(torch.cuda.max_memory_allocated() / 2**30, 3)
             if torch.cuda.is_available() else None,
             "seconds_per_optimizer_step": (
