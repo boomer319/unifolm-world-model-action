@@ -130,12 +130,20 @@ def main():
     # min/max statistics that were fitted on THIS data.
     data = instantiate_from_config(cfg.data)
     data.setup()
-    ds_name = list(data.dataset_configs["test"]["params"].get(
-        "dataset_name", [a.dataset]))[0] if isinstance(
-        data.dataset_configs["test"]["params"].get("dataset_name"), list) \
-        else data.dataset_configs["test"]["params"].get("dataset_name", a.dataset)
-    dset = data.test_datasets[ds_name]
-    print(f"  dataset: {ds_name}", flush=True)
+    # Our config declares only a train split - the evaluation script upstream
+    # builds its own test split - so take whichever split exists. It is the same
+    # WMAData with the same parameters; what we need from it is the spatial
+    # transform and the min/max statistics fitted on this data.
+    dset = None
+    for split in ("test", "validation", "train"):
+        datasets = getattr(data, f"{split}_datasets", None)
+        if datasets:
+            ds_name = a.dataset if a.dataset in datasets else sorted(datasets)[0]
+            dset = datasets[ds_name]
+            print(f"  dataset: {ds_name} (split={split})", flush=True)
+            break
+    if dset is None:
+        raise RuntimeError("no dataset split available from the data module")
 
     # Ground truth from the converted h5 (absolute joint targets, radians).
     import h5py
