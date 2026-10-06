@@ -57,6 +57,10 @@ def parse_args():
     p.add_argument("--width", type=int, default=512)
     p.add_argument("--seed", type=int, default=123)
     p.add_argument("--out", required=True)
+    p.add_argument("--teacher-force-z", action="store_true",
+                   help="complete teacher forcing: substitute the video branch's "
+                        "noisy latent with ground truth, so the world-model "
+                        "features the action head consumes also come from truth")
     p.add_argument("--teacher-force", action="store_true",
                    help="feed the action head the true next frames in place of "
                         "the last observed ones, paired against the normal path")
@@ -173,6 +177,38 @@ def main():
 
     _TF_FRAMES = {"x": None}
 
+    # ---------------------------------------------------------------------
+    # Complete teacher forcing.
+    #
+    # The action head also receives imagen_cond - the world model's multi-scale
+    # UNet features - so substituting only cond["image"] leaves the second, and
+    # arguably the richer, pathway untouched. Substituting the video branch's
+    # noisy latent instead makes every feature derive from ground truth, and
+    # because the latent is re-noised at each step with the model's own
+    # q_sample, the noise level still matches the step being evaluated.
+    # ---------------------------------------------------------------------
+    _TFZ = {"z": None}
+    if a.teacher_force_z:
+        _wm = model.model.diffusion_model
+        _wrap = model.model
+        _orig_wm_forward = _wm.forward
+
+        def _wm_forward_tf(x, *args, **kw):
+            if _TFZ.get("z") is not None:
+                ts = kwargs.get("timesteps", args[2] if len(args) > 2 else None)
+                z0 = _TFZ["z"]
+                if z0.shape[-3] != x.shape[-3]:
+                    z0 = torch.nn.functional.interpolate(
+                        z0, size=x.shape[-3:], mode="nearest")
+                eps = torch.randn_like(x)
+                x = _wrap.q_sample(ts, z0.expand_as(x) if z0.shape[1] == 1 else z0, eps)
+                _TFZ["fired"] = _TFZ.get("fired", 0) + 1
+            return _orig_wm_forward(x, *args, **kw)
+
+        _wm.forward = _wm_forward_tf
+        print("  teacher forcing (complete): video branch latent comes from GT",
+              flush=True)
+
     # The test dataset gives us the exact preprocessing the server uses, plus the
     # min/max statistics that were fitted on THIS data.
     data = instantiate_from_config(cfg.data)
@@ -264,7 +300,25 @@ def main():
             ft = (ft / 255 - 0.5) * 2
             gt_for_tf = ft.permute(1, 0, 2, 3).unsqueeze(0)   # (1,C,T,H,W)
 
+        z_gt = None
+        if a.teacher_force_z:
+            gt_t = dset.spatial_transform(
+                torch.tensor(np.transpose(
+                    vr.get_batch([t + a.frame_stride * i
+                                  for i in range(a.horizon)]).asnumpy(),
+                    (0, 3, 1, 2)))).to(device)
+            gt_t = (gt_t / 255 - 0.5) * 2
+            with torch.no_grad():
+                z_gt = model.model.encode_first_stage(gt_t.unsqueeze(0))
+
+        _TFZ["z"] = z_gt
         vid, act = _run("normal")
+        _TFZ["z"] = None
+        act_tfz = None
+        if a.teacher_force_z:
+            _TFZ["z"] = z_gt
+            _, act_tfz = _run("tfz")
+            _TFZ["z"] = None
         act_tf = None
         if a.teacher_force:
             _TF_FRAMES["x"] = gt_for_tf
@@ -325,6 +379,13 @@ def main():
             m["tf_ratio_vs_baseline"] = mtf["ratio_vs_baseline"]
             m["tf_corr"] = mtf["corr"]
             preds_tf.append(act_tf)
+        if act_tfz is not None:
+            mz = metrics(act_tfz, gt, gt_states[t])
+            m["tfz_mae"] = mz["mae"]
+            m["tfz_ratio_vs_baseline"] = mz["ratio_vs_baseline"]
+            m["tfz_delta_pred"] = mz["delta_pred"]
+            m["tfz_corr"] = mz["corr"]
+            preds_tf.append(act_tfz)
         m["anchor"] = int(t)
         m["seconds"] = round(time.time() - t0, 2)
         per_anchor.append(m)
@@ -339,7 +400,8 @@ def main():
     for k in ("mae", "mae_no_motion", "ratio_vs_baseline", "delta_pred",
               "delta_gt", "delta_ratio", "corr", "endpoint",
               "video_psnr", "video_mae_px",
-              "tf_mae", "tf_ratio_vs_baseline", "tf_delta_pred", "tf_corr"):
+              "tf_mae", "tf_ratio_vs_baseline", "tf_delta_pred", "tf_corr",
+              "tfz_mae", "tfz_ratio_vs_baseline", "tfz_delta_pred", "tfz_corr"):
         vals = [m[k] for m in per_anchor if not np.isnan(m[k])]
         agg[k] = float(np.mean(vals)) if vals else float("nan")
         agg[k + "_std"] = float(np.std(vals)) if vals else float("nan")
@@ -377,7 +439,12 @@ def main():
     print(f"  correlation      {agg['corr']:+.4f}")
     print(f"  video PSNR       {agg['video_psnr']:.2f} dB"
           f"  (pixel MAE {agg['video_mae_px']:.2f})")
-    if preds_tf:
+    if preds_tf and "tfz_mae" in agg and agg["tfz_mae"] == agg["tfz_mae"]:
+        print(f"  TF (complete)    MAE {agg['tfz_mae']:.4f}"
+              f"  ratio {agg['tfz_ratio_vs_baseline']:.3f}"
+              f"  delta {agg['tfz_delta_pred']:.4f}"
+              f"  corr {agg['tfz_corr']:+.4f}")
+    if preds_tf and "tf_mae" in agg and agg["tf_mae"] == agg["tf_mae"]:
         print(f"  TEACHER FORCED   MAE {agg['tf_mae']:.4f}"
               f" (baseline {agg['mae_no_motion']:.4f},"
               f" ratio {agg['tf_ratio_vs_baseline']:.3f})"
