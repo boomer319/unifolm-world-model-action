@@ -1,0 +1,24 @@
+{
+    "_comment": "28-DoF G1 Dex3 shape spec. Loaded by MultiImageObsEncoder via the shape_meta_path parameter (multi_image_obs_encoder.py:22,44-47); the upstream default is the hardcoded CWD-relative configs/train/meta.json, which our config overrides. Agent state/action layout: 7 left arm + 7 right arm + 7 left hand + 7 right hand, matching meta/modality.json of G1_Dex3_GraspSquare_Dataset_GEAR (left_arm_pos 0-7, right_arm_pos 7-14, left_hand_pos 14-21, right_hand_pos 21-28).",
+    "obs": {
+        "image": {
+            "shape": [
+                3,
+                320,
+                512
+            ],
+            "type": "rgb"
+        },
+        "agent_pos": {
+            "shape": [
+                28
+            ],
+            "type": "low_dim"
+        }
+    },
+    "action": {
+        "shape": [
+            28
+        ]
+    }
+}
