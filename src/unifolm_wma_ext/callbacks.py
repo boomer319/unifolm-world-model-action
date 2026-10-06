@@ -208,20 +208,38 @@ class RunRecorder(pl.Callback):
     # ------------------------------------------------------------- per batch
     @staticmethod
     def _numeric(metrics):
-        return {k: float(v) for k, v in metrics.items()
-                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        if not metrics:
+            return {}
+        if not hasattr(metrics, "items"):
+            return {}
+        out = {}
+        for k, v in metrics.items():
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if f == f and abs(f) != float("inf"):  # drop nan/inf
+                out[k] = f
+        return out
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         if self._writer is None:
             return
-        m = self._numeric(trainer.callback_metrics)
-        # PL empties callback_metrics once the epoch/fit ends, so remember the
-        # last non-empty snapshot for summary.json.
+        # With accumulate_grad_batches > 1, trainer.callback_metrics is still
+        # EMPTY in on_train_batch_end: PL only populates it after the optimizer
+        # step. The values for THIS batch are in `outputs`, which is the dict
+        # training_step returned and where self.log() accumulates. Read both and
+        # prefer whichever is non-empty, otherwise the CSV has no metric columns
+        # at all (which is exactly what the first two verification runs produced).
+        m = self._numeric(outputs if hasattr(outputs, "items") else None)
+        if not m:
+            m = self._numeric(getattr(trainer, "callback_metrics", None))
+        if not m:
+            m = self._last_metrics
         if m:
             self._last_metrics = m
-        # The first batch fixes the column order from whatever PL exposes then;
-        # later batches reuse it so the CSV stays rectangular.
-        if self._keys is None:
+        # The first batch that actually carries metrics fixes the column order.
+        if self._keys is None and m:
             self._keys = sorted(m)
             self._writer.writerow(["batch", "global_step", "epoch", "wall_s",
                                    "peak_GiB"] + ["m_" + k for k in self._keys])
@@ -229,7 +247,7 @@ class RunRecorder(pl.Callback):
                round(time.time() - self._t0, 2),
                round(torch.cuda.max_memory_allocated() / 2**30, 3)
                if torch.cuda.is_available() else ""]
-        row += [m.get(k, "") for k in self._keys]
+        row += [m.get(k, "") for k in (self._keys or [])]
         self._writer.writerow(row)
         self._fh.flush()
 
