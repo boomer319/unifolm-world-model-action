@@ -239,7 +239,13 @@ def main():
                 a.out, f"video_anchor{t:05d}.mp4"), fps=15)
             # Ground truth alongside, built the same way so both clips share a
             # writer and a resolution: ref on the left, prediction on the right.
-            ref = torch.from_numpy(gt_im).permute(3, 0, 1, 2) * 2 - 1  # (C,T,H,W)
+            # gt_im is still 0..255 (the spatial transform preserved uint8), and
+            # tensor_to_mp4 rescales from -1..1, so the conversion has to be
+            # explicit. Feeding it 0..255 directly and only doing *2-1 mapped most
+            # values past +1, which the writer clamps to white - the ground-truth
+            # half of the comparison clips came out white with green speckle.
+            ref = (torch.from_numpy(gt_im).float().permute(3, 0, 1, 2)
+                   / 255.0 * 2.0 - 1.0)                              # (C,T,H,W)
             gen = vid[0].detach().cpu()
             side = torch.cat([ref, gen], dim=3).unsqueeze(0)           # (1,C,T,2H,W)
             tensor_to_mp4(side, os.path.join(a.out, f"cmp_anchor{t:05d}.mp4"),
