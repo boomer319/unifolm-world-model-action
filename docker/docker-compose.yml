@@ -1,0 +1,215 @@
+# UnifoLM-WMA (Unitree) - G1 Dex3 adaptation, on the .240 no-toolkit pattern.
+#
+# .240 has NO nvidia-container-toolkit (no nvidia runtime, no CDI specs), so GPU
+# access is raw device nodes + host libcuda bind-mounts, exactly like
+# dreamzero_docker_env/docker-compose.yml. Do NOT add `runtime: nvidia` or
+# `gpus:` here - both fail on .240.
+#
+# GPU POLICY: .240 is GPU 0 only (hard rule), so the device nodes live in the
+# base anchor instead of being interpolated. There is deliberately no
+# per-service `environment:` block anywhere below: YAML merge keys are shallow,
+# so a service-level `environment:` would silently REPLACE the whole base
+# environment and drop WMA_DATA_DIR, HF_HOME and the rank variables. Services
+# differ only by `command:`.
+#
+# Host networking is used so the Isaac Sim container on .249 can reach the
+# eval server (FastAPI/uvicorn, port 8000) directly.
+#
+# Usage, from this docker/ dir, after ./build.sh:
+#   docker compose run --rm wma-env        # environment verification
+#   docker compose run --rm wma-convert    # LeRobot v2 -> WMA format (1 episode)
+#   docker compose run --rm wma-load       # load Base ckpt, report every mismatch
+#   docker compose run --rm wma-smoke      # 100 trainer steps: s/step + VRAM
+#   docker compose up -d wma-shell         # interactive shell
+
+x-wma-base: &wma-base
+  build:
+    # Repo root as context so the Dockerfile can COPY pyproject.toml + src/.
+    context: ..
+    dockerfile: docker/Dockerfile
+    args:
+      tmp_UID: ${tmp_UID:-1000}
+      tmp_GID: ${tmp_GID:-1000}
+      USERNAME: ${USERNAME:-user}
+  image: unifolm-wma:py310-cu124
+  working_dir: /workspace
+  network_mode: "host"
+  ipc: host
+  ulimits:
+    memlock: { soft: -1, hard: -1 }
+    stack: { soft: 67108864, hard: 67108864 }
+  # trainer.py:79-81 does int(os.environ.get('LOCAL_RANK')) and crashes when the
+  # variable is unset, so the rank triple is set for every service.
+  environment:
+    HOME: /home/${USERNAME:-user}
+    VIRTUAL_ENV: /opt/wma
+    PATH: /opt/wma/bin:${PATH}
+    # unifolm_wma_ext is our own package added after the image was built; the
+    # editable install's package map may not know it, so src/ is on PYTHONPATH
+    # explicitly. /workspace is a bind mount, so no rebuild is needed for edits.
+    PYTHONPATH: /workspace/src
+    LD_LIBRARY_PATH: /nvidia-host
+    PYTHONUNBUFFERED: "1"
+    HF_HOME: /docker_data/cache/huggingface
+    HF_HUB_ENABLE_HF_TRANSFER: "0"
+    TORCH_HOME: /docker_data/cache/torch
+    XDG_CACHE_HOME: /docker_data/cache
+    # LeRobot v2 source dataset (read-only mount) and the WMA data root.
+    WMA_SOURCE_DIR: /datasets
+    WMA_DATA_DIR: /data_wma
+    LOCAL_RANK: "0"
+    RANK: "0"
+    WORLD_SIZE: "1"
+  volumes:
+    # The repo working tree, mounted over the image's /workspace so code edits
+    # take effect without a rebuild.
+    - /data/docker-services/world_action_models/unifolm_wma:/workspace
+    # Converted WMA-format data: videos/, transitions/, <name>.csv.
+    - /data/docker-services/world_action_models/unifolm_wma/data:/data_wma
+    # Caches (HF hub, torch hub), logs, lightning workspace.
+    - /data/docker-services/world_action_models/unifolm_wma/docker_data:/docker_data
+    # LeRobot v2 datasets already on .240 (G1_Dex3_GraspSquare_Dataset_GEAR, ...).
+    - /data/docker-services/world_action_models/dreamzero/datasets:/datasets:ro
+    # Host driver libraries, needed because there is no nvidia runtime.
+    - /lib/x86_64-linux-gnu/libcuda.so.1:/nvidia-host/libcuda.so.1:ro
+    - /lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.1:/nvidia-host/libnvidia-ptxjitcompiler.so.1:ro
+    - /lib/x86_64-linux-gnu/libnvidia-ml.so.1:/nvidia-host/libnvidia-ml.so.1:ro
+  devices:
+    # GPU 0 is the default and the standing rule for .240. WMA_GPU only exists
+    # for the sanctioned multi-GPU exception (independent runs on separate GPUs,
+    # not DDP); with it unset every service still gets GPU 0 only.
+    - /dev/nvidia${WMA_GPU:-0}:/dev/nvidia${WMA_GPU:-0}
+    - /dev/nvidiactl:/dev/nvidiactl
+    - /dev/nvidia-uvm:/dev/nvidia-uvm
+    - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+
+services:
+  # Environment verification: interpreter, every import the training and serving
+  # paths need, ffmpeg, CUDA and the xformers kernel registration.
+  wma-env:
+    <<: *wma-base
+    command: bash docker/env_smoke.sh
+
+  # Interactive debugging shell.
+  wma-shell:
+    <<: *wma-base
+    command: sleep infinity
+
+  # LeRobot v2 -> UnifoLM-WMA conversion. ffmpeg transcodes AV1 -> H.264, so this
+  # is CPU-only work. Writes /data_wma/{videos,transitions}/<name> + <name>.csv
+  wma-convert:
+    <<: *wma-base
+    command: >
+      python prepare_data/prepare_g1_dex3.py
+      --source_dir /datasets
+      --dataset_name G1_Dex3_GraspSquare_Dataset_GEAR
+      --target_dir /data_wma
+      --output_name g1_dex3_graspsquare_1ep
+      --view observation.images.cam_left_high
+      --robot_name "Unitree G1 Robot with Dex3 Hands"
+      --num_episodes 1
+
+  # Instantiate the 28-DoF config, load the Base checkpoint and report every
+  # weight that did not load. Upstream loads with strict=False
+  # (utils/train.py:165), which hides missing/unexpected keys; and at 28 DoF the
+  # action/state UNet input projections change shape, which raises even with
+  # strict=False. load_test.py drops and reports exactly those tensors.
+  wma-load:
+    <<: *wma-base
+    command: >
+      python docker/load_test.py
+      --config configs/train/config_g1_dex3.yaml
+      --ckpt checkpoints/unifolm_wma_base.ckpt
+      --report /docker_data/logs/load_test.json
+
+  # ~100 trainer steps: pure measurement of s/step, step time and VRAM.
+  # lightning.strategy=auto is already the default in our config; it is repeated
+  # here as a belt-and-braces override because the repo default is
+  # DDPShardedStrategy, which requires more than one GPU.
+  wma-smoke:
+    <<: *wma-base
+    command: >
+      python scripts/trainer.py --train
+      --base configs/train/config_g1_dex3.yaml
+      --name smoke
+      --logdir /docker_data/logs
+      --devices 1
+      --total_gpus=1
+      lightning.trainer.num_nodes=1
+      lightning.strategy=auto
+      lightning.trainer.max_steps=100
+      lightning.callbacks.model_checkpoint.params.every_n_train_steps=100
+
+  # --- 100-step verification runs (one per base checkpoint) ------------------
+  # Both write a thesis-grade record to /docker_data/runs/<name>/ via the
+  # RunRecorder callback: manifest.json (git SHA, config hash, dataset hashes,
+  # checkpoint identity, GPU, versions), metrics.csv, summary.json.
+  wma-verify-base:
+    <<: *wma-base
+    command: >
+      python scripts/trainer.py --train
+      --base configs/train/config_g1_dex3.yaml
+      --name verify_base
+      --logdir /docker_data/runs
+      --devices 1
+      --total_gpus=1
+      lightning.trainer.num_nodes=1
+      lightning.strategy=auto
+      lightning.trainer.max_steps=100
+      lightning.callbacks.model_checkpoint.params.every_n_train_steps=100
+
+  # Base has no action_unet/state_unet (it is the README's Step 1, world model
+  # only), so the stock loader loads it with strict=False and no shape error.
+  # Dual matches the code exactly but needs prepare_ckpt.py first, because
+  # upstream load_checkpoints raises on the 68 DoF-shaped tensors.
+  #
+  # WMA_BASE_CKPT tells the RunRecorder which checkpoint actually seeded the run
+  # (it cannot be interpolated from the YAML: OmegaConf 2.3 supports neither a
+  # relative nor an absolute form from inside a nested node). Pass it as
+  #   docker compose run --rm -e WMA_BASE_CKPT=<path> <service>
+  wma-verify-dual:
+    <<: *wma-base
+    command: >
+      python scripts/trainer.py --train
+      --base configs/train/config_g1_dex3.yaml
+      --name verify_dual
+      --logdir /docker_data/runs
+      --devices 1
+      --total_gpus=1
+      lightning.trainer.num_nodes=1
+      lightning.strategy=auto
+      lightning.trainer.max_steps=100
+      lightning.callbacks.model_checkpoint.params.every_n_train_steps=100
+      model.pretrained_checkpoint=checkpoints/unifolm_wma_dual_28dof_init.ckpt
+
+  # Real fine-tuning run (Phase 1: 1-episode overfit).
+  wma-train:
+    <<: *wma-base
+    command: >
+      python scripts/trainer.py --train
+      --base configs/train/config_g1_dex3.yaml
+      --name $${RUN_NAME:-overfit1ep}
+      --logdir /docker_data/logs
+      --devices 1
+      --total_gpus=1
+      lightning.trainer.num_nodes=1
+      lightning.strategy=auto
+
+  # Decision-making eval server: FastAPI + uvicorn on port 8000.
+  wma-server:
+    <<: *wma-base
+    command: >
+      python scripts/evaluation/real_eval_server.py
+      --seed 123
+      --ckpt_path checkpoints/unifolm_wma_base.ckpt
+      --config configs/inference/world_model_decision_making.yaml
+      --savedir /docker_data/logs/server/videos
+      --bs 1 --height 320 --width 512
+      --unconditional_guidance_scale 1.0
+      --ddim_steps 16
+      --ddim_eta 1.0
+      --video_length 16
+      --frame_stride 2
+      --timestep_spacing uniform_trailing
+      --guidance_rescale 0.7
+      --perframe_ae

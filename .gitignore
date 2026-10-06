@@ -112,6 +112,15 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
+# G1 Dex3 adaptation (our work) -------------------------------------------------
+# Runtime artifacts: checkpoints, converted data, caches/logs, host-specific
+# compose identity file written by docker/build.sh.
+/checkpoints/
+/data/
+/docker_data/
+/logs/
+/docker/.env
+
 *.pdf
 .pdf
 plot_test/
@@ -128,3 +137,8 @@ Data/Pretrained
 Data/utils.py
 Experiment/checkpoint
 Experiment/log
+
+# The blanket *.json rule above (line ~137) would silently skip the 28-DoF shape
+# spec that configs/train/config_g1_dex3.yaml points at. Re-include it AFTER that
+# rule, because in gitignore the LAST matching pattern wins.
+!configs/train/meta_g1_dex3.json
