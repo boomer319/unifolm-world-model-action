@@ -78,6 +78,17 @@ echo "=============================================================="
 python - <<'PY'
 import importlib, sys, traceback
 
+# pytorch-lightning must stay on the 1.x line: scripts/trainer.py:178 calls
+# Trainer.from_argparse_args, which 2.x removed.
+try:
+    import pytorch_lightning as pl
+    assert hasattr(pl.Trainer, "from_argparse_args"), "Trainer.from_argparse_args missing"
+    print(f"OK   pytorch_lightning {pl.__version__} keeps Trainer.from_argparse_args (1.x API)")
+except Exception:
+    print("FAIL pytorch_lightning 1.x API requirement")
+    traceback.print_exc(limit=2)
+    sys.exit(1)
+
 targets = [
     ("unifolm_wma",                        "the package itself"),
     ("unifolm_wma.data.wma_data",          "WMAData, the dataset we train on"),

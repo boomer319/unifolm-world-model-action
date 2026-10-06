@@ -80,18 +80,20 @@ and every consumer must run `build.sh` first. A self-contained image lets
 `docker compose run <svc>` work immediately. `/opt` rather than `/home/$USER`
 because compose does not bind-mount over the home directory.
 
-**3. `torch==2.4.1` + `torchvision==0.19.1` + `xformers==0.0.27`.**
-Upstream pins `torch==2.3.1` together with `xformers==0.0.27`, but every
-xformers 0.0.27 wheel is built against torch 2.4.1 - the pins cannot both be
-satisfied. PyPI's default linux wheels bundle CUDA 12.1, which the 12.4 driver
-supports. xformers is not optional: without it upstream reports ~200 s/iteration
-(GitHub issue #41).
+**3. `torch==2.3.1` + `torchvision==0.18.1` + `xformers==0.0.27` - upstream's own
+pins, unchanged.** They are consistent: `xformers 0.0.27` declares
+`torch==2.3.1` and `torchvision 0.18.1` declares `torch==2.3.1`. (This file
+initially "fixed" the triple to torch 2.4.1 on the assumption that xformers
+0.0.27 tracked 2.4.x; pip rejected it with `ResolutionImpossible`, which is what
+settled the question.) PyPI's default linux wheels bundle CUDA 12.1, which the
+12.4 driver supports. xformers is not optional: without it upstream reports
+~200 s/iteration (GitHub issue #41).
 
-**4. `pytorch-lightning==1.9.5` instead of `1.9.3`.**
-1.9.3 predates torch 2.0 and breaks on torch>=2.0
-(`pytorch_lightning.overrides.distributed`); 1.9.5 is the last 1.9.x and is
-required anyway because `scripts/trainer.py:178` uses the 1.x-only
-`Trainer.from_argparse_args`.
+**4. `pytorch-lightning==1.9.5` instead of `1.9.3`.** Hard requirement, not a
+preference: `scripts/trainer.py:178` calls `Trainer.from_argparse_args`, which
+pytorch-lightning 2.x removed, so the install must stay on the 1.x line, and
+1.9.5 is its final release. `docker/env_smoke.sh` asserts the attribute exists so
+the constraint stays self-verifying.
 
 **5. Dependencies upstream's `pyproject.toml` omits but the code imports:**
 `h5py` (wma_data.py:5), `safetensors` (data/utils.py:6),

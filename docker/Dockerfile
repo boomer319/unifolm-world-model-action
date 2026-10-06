@@ -52,13 +52,17 @@ RUN python3 -m venv "${VIRTUAL_ENV}" \
     && pip install --upgrade "pip<25" setuptools wheel
 
 # --- torch stack ------------------------------------------------------------
-# Upstream pyproject.toml pins torch==2.3.1 together with xformers==0.0.27, but
-# every xformers 0.0.27 wheel is built against torch 2.4.1 - the two pins are
-# mutually incompatible as published wheels. Install the consistent pair.
+# Upstream's own pins, verified consistent by pip's resolver:
+# xformers 0.0.27 declares `torch==2.3.1` and torchvision 0.18.1 declares
+# `torch==2.3.1`. (An earlier draft of this file assumed 0.0.27 tracked torch
+# 2.4.1 and "fixed" the triple to 2.4.1; pip rejected that with
+# ResolutionImpossible, which is what proved the upstream combination correct.)
 # PyPI's default linux wheels bundle CUDA 12.1, which the 12.4 driver supports.
+# xformers is not optional: without it upstream reports ~200 s/iteration
+# (GitHub issue #41).
 RUN pip install \
-    torch==2.4.1 \
-    torchvision==0.19.1 \
+    torch==2.3.1 \
+    torchvision==0.18.1 \
     xformers==0.0.27
 
 # --- remaining runtime deps -------------------------------------------------
@@ -84,10 +88,9 @@ RUN pip install \
     tqdm==4.66.5 \
     transformers==4.40.1
 
-# pytorch-lightning bumped 1.9.3 -> 1.9.5. 1.9.3 predates torch 2.0 and breaks
-# on torch>=2.0 (pytorch_lightning.overrides.distributed); 1.9.5 is the last
-# 1.9.x and is required anyway because trainer.py:178 uses the 1.x-only
-# Trainer.from_argparse_args.
+# pytorch-lightning bumped 1.9.3 -> 1.9.5. Hard requirement: scripts/trainer.py:178
+# calls Trainer.from_argparse_args, which pytorch-lightning 2.x removed, so the
+# install must stay on the 1.x line; 1.9.5 is its last release.
 RUN pip install pytorch-lightning==1.9.5
 
 # --- dependencies upstream OMITS from pyproject.toml but the code imports ----
