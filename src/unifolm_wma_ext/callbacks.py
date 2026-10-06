@@ -109,15 +109,20 @@ class RunRecorder(pl.Callback):
         (utils/train.py:13-17) puts the run name one level up, so prefer that,
         then an explicit WMA_RUN_NAME override.
         """
-        logdir = str(getattr(trainer, "logdir", "") or "").rstrip("/")
-        candidates = [
-            os.environ.get("WMA_RUN_NAME"),
-            os.path.basename(os.path.dirname(logdir)) if logdir else None,
-            os.path.basename(logdir) if logdir else None,
-            getattr(trainer, "default_hp", {}).get("run_name") if hasattr(trainer, "default_hp") else None,
-            "run",
-        ]
-        name = next((c for c in candidates if c), "run")
+        candidates = [os.environ.get("WMA_RUN_NAME")]
+        for attr in ("logdir", "log_dir"):
+            try:
+                v = str(getattr(trainer, attr, "") or "").rstrip("/")
+            except Exception:
+                v = ""
+            if v:
+                # PL's logdir is the LOGGER's dir (<workdir>/tensorboard), and
+                # init_workspace puts the run name one level above it.
+                candidates += [os.path.basename(os.path.dirname(v)),
+                               os.path.basename(v)]
+        # A timestamped last resort: two runs must never share a directory.
+        candidates.append("run_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"))
+        name = next((c for c in candidates if c), None)
         d = os.path.join(self.out_dir, name)
         os.makedirs(d, exist_ok=True)
         return d, name
@@ -178,8 +183,7 @@ class RunRecorder(pl.Callback):
                 "accumulate_grad_batches": trainer.accumulate_grad_batches,
                 "precision": trainer.precision,
                 "strategy": str(trainer.strategy),
-                "devices": str(trainer._accelerator_connector.devices)
-                if hasattr(trainer, "_accelerator_connector") else None,
+                "num_devices": getattr(trainer, "num_devices", None),
             },
         }
         # Dataset identity: hash the CSV and the h5 so a thesis claim can be tied
