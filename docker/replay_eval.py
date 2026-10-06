@@ -205,6 +205,11 @@ def main():
                 if ts is None:
                     raise RuntimeError("teacher forcing could not find the "
                                        "timestep argument")
+                # DDIM hands the timestep over as a float tensor; q_sample
+                # gathers the schedule with it, which needs an integer index.
+                if not torch.is_tensor(ts):
+                    ts = torch.tensor([ts])
+                ts = ts.long()
                 z0 = _TFZ["z"]
                 if z0.shape[-3] != x.shape[-3]:
                     z0 = torch.nn.functional.interpolate(
