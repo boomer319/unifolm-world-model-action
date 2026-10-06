@@ -68,6 +68,7 @@ class RunRecorder(pl.Callback):
         self.dataset_name = dataset_name
         self.tag = tag
         self._rows = []
+        self._last_metrics = {}
         self._keys = None
         self._fh = None
         self._writer = None
@@ -214,6 +215,10 @@ class RunRecorder(pl.Callback):
         if self._writer is None:
             return
         m = self._numeric(trainer.callback_metrics)
+        # PL empties callback_metrics once the epoch/fit ends, so remember the
+        # last non-empty snapshot for summary.json.
+        if m:
+            self._last_metrics = m
         # The first batch fixes the column order from whatever PL exposes then;
         # later batches reuse it so the CSV stays rectangular.
         if self._keys is None:
@@ -244,7 +249,10 @@ class RunRecorder(pl.Callback):
             "seconds_per_optimizer_step": (
                 round((time.time() - self._t0) / trainer.global_step, 3)
                 if trainer.global_step else None),
-            "final_metrics": {k: float(v) for k, v in m.items()
+            # callback_metrics is empty by the time on_fit_end runs, so fall
+            # back to the last snapshot taken during training.
+            "final_metrics": {k: float(v) for k, v in
+                              (m or self._last_metrics).items()
                               if isinstance(v, (int, float)) and not isinstance(v, bool)},
         }
         with open(os.path.join(self.run_dir, "summary.json"), "w") as f:
