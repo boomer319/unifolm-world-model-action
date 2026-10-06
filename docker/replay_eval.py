@@ -147,9 +147,13 @@ def main():
     # ---------------------------------------------------------------------
     _orig_head_forward = None
     if a.teacher_force:
-        # model -> LatentVisualDiffusion -> .model DiffusionWrapper ->
-        # .model WMAModel (which owns action_unet)
-        head = model.model.model.action_unet
+        # Verified by walking the live module tree rather than by reading it:
+        #   model                             LatentVisualDiffusion
+        #    .model                           DiffusionWrapper
+        #     .diffusion_model                WMAModel
+        #      .action_unet                   ConditionalUnet1D   <- the head
+        # Guessing this twice cost two runs; introspect the tree instead.
+        head = model.model.diffusion_model.action_unet
         _orig_head_forward = head.forward
 
         def _tf_forward(sample, timestep, imagen_cond=None, cond=None, **kw):
