@@ -31,6 +31,11 @@ echo "=== replay sweep: $RUN on GPU $GPU, ${#STEPS[@]} checkpoints ==="
 for STEP in "${STEPS[@]}"; do
   CKPT=$(ls "$CKPT_DIR"/epoch=*-step="$STEP".ckpt 2>/dev/null | head -1)
   [ -n "$CKPT" ] || { echo "  step $STEP: MISSING, skipped"; continue; }
+  # This script runs on the host but the container sees the repo root as
+  # /workspace, so the checkpoint has to be handed over as a container path. A
+  # host path fails with FileNotFoundError from inside torch.load - which is how
+  # an entire sweep silently "completed" while evaluating nothing.
+  CKPT_IN_CONTAINER=/workspace/${CKPT#"$REPO"/}
   OUT="$EXP/replay/$RUN/step$STEP"
   if [ -f "$OUT/summary.json" ]; then
     echo "  step $STEP: already done, skipped"
@@ -38,14 +43,22 @@ for STEP in "${STEPS[@]}"; do
   fi
   echo "  --- step $STEP ---"
   START=$(date +%s)
-  WMA_GPU="$GPU" docker compose run --rm --no-deps \
+  STEP_LOG=/experiments/logs/replay_${RUN}_step${STEP}.log
+  if WMA_GPU="$GPU" docker compose run --rm --no-deps \
       -e WMA_GPU="$GPU" \
       wma-shell python docker/replay_eval.py \
       --config configs/train/config_g1_dex3.yaml \
-      --ckpt "$CKPT" \
+      --ckpt "$CKPT_IN_CONTAINER" \
       --anchors 8 --dump-video \
-      --out "$OUT" 2>&1 | grep -aE "anchor |MAE|delta|correlation|video PSNR|verdict" \
-    || echo "  step $STEP: FAILED (see log)"
+      --out "$OUT" > "$STEP_LOG" 2>&1; then
+    grep -aE "MAE  |per-step|correlation|video PSNR|verdict" "$STEP_LOG" | sed "s/^/  /"
+  else
+    # Print the tail of the real log. An earlier version piped everything through
+    # grep, so a run that failed on step 1 reported "FAILED (see log)" while the
+    # log itself did not exist - the actual traceback was thrown away.
+    echo "  step $STEP: FAILED - tail of $STEP_LOG"
+    tail -6 "$STEP_LOG" | sed "s/^/      /"
+  fi
   echo "  step $STEP took $(( $(date +%s) - START ))s"
 done
 echo "=== sweep done: $RUN ==="
