@@ -13,6 +13,12 @@ set -euo pipefail
 GPU="$1"; RUN="$2"; shift 2
 STEPS=("$@")
 
+# Which config to build the model from. MUST match the config the checkpoint was
+# trained with: n_obs_steps feeds cond_dim, so an obs4 checkpoint cannot load
+# into a model built from the n_obs=2 config ("size mismatch for
+# dp_ema_model...cond_encoder.1.weight: [4096, 3824] vs [4096, 3256]").
+REPLAY_CONFIG=${SWEEP_CONFIG:-configs/train/config_g1_dex3.yaml}
+
 REPO=/data/docker-services/world_action_models/unifolm_wma
 # This script runs on the host, but /experiments is the CONTAINER mount point.
 # Paths given to docker compose (--out) use /experiments/...; anything bash
@@ -32,7 +38,7 @@ if [ ${#STEPS[@]} -eq 0 ]; then
     | sed -n 's/^epoch=[0-9]*-step=\([0-9]*\)\.ckpt$/\1/p' | sort -n)
 fi
 
-echo "=== replay sweep: $RUN on GPU $GPU, ${#STEPS[@]} checkpoints ==="
+echo "=== replay sweep: $RUN on GPU $GPU, ${#STEPS[@]} checkpoints, config $REPLAY_CONFIG ==="
 for STEP in "${STEPS[@]}"; do
   CKPT=$(ls "$CKPT_DIR"/epoch=*-step="$STEP".ckpt 2>/dev/null | head -1)
   [ -n "$CKPT" ] || { echo "  step $STEP: MISSING, skipped"; continue; }
@@ -60,7 +66,7 @@ for STEP in "${STEPS[@]}"; do
       -e OMP_NUM_THREADS="${THREADS:-8}" \
       -e MKL_NUM_THREADS="${THREADS:-8}" \
       wma-shell python docker/replay_eval.py \
-      --config configs/train/config_g1_dex3.yaml \
+      --config "$REPLAY_CONFIG" \
       --ckpt "$CKPT_IN_CONTAINER" \
       --anchors 8 --dump-video \
       --out "$OUT" > "$STEP_LOG" 2>&1; then
