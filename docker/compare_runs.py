@@ -48,7 +48,7 @@ def load(runs_dir, run):
                     manifest = json.load(f)
                 else:
                     summary = json.load(f)
-    return series, manifest, summary
+    return series, timing, manifest, summary
 
 
 def mean(xs):
@@ -68,14 +68,14 @@ def main():
     for run in args.runs:
         try:
             data[run] = load(args.runs_dir, run)
-        except FileNotFoundError as e:
+        except (FileNotFoundError, KeyError) as e:
             print(f"!! {run}: {e}")
 
     # ---------------------------------------------------------- provenance
     print("=" * 78)
     print(" provenance")
     print("=" * 78)
-    for run, (_, man, _) in data.items():
+    for run, (_, _, man, _) in data.items():
         if not man:
             continue
         bc = man["base_checkpoint"]
@@ -102,7 +102,7 @@ def main():
     print("=" * 78)
     print(f"  {'run':22s} {'batches':>8} {'wall_s':>8} {'s/batch':>8} "
           f"{'peak_GiB':>9} {'ended_by':>12}")
-    for run, (series, _, summ) in data.items():
+    for run, (series, _, _, summ) in data.items():
         if not series:
             continue
         walls = [s["wall_s"] for s in series]
@@ -128,11 +128,11 @@ def main():
         print("=" * 78)
         print(f" {k}")
         print("=" * 78)
-        head = f"  {'batch':>7} |" + "".join(f" {r[:18]:>18}" for r in data)
+        head = f"  {'update':>7} |" + "".join(f" {r[:18]:>18}" for r in data)
         print(head)
         for i in idx:
             row = f"  {i:>7} |"
-            for run, (series, _, _) in data.items():
+            for run, (series, _, _, _) in data.items():
                 v = series[i].get(k) if i < len(series) else None
                 row += f" {v:>18.4f}" if isinstance(v, float) else f" {'-':>18}"
             print(row)
@@ -144,11 +144,12 @@ def main():
           f"{'delta%':>9} {'min':>10}")
     print("=" * 78)
     for k in args.keys:
-        for run, (series, _, _) in data.items():
+        for run, (series, _, _, _) in data.items():
             v = [s[k] for s in series if isinstance(s.get(k), float)]
             if not v:
                 continue
-            f20, l20 = mean(v[:20]), mean(v[-20:])
+            w = min(20, max(1, len(v) // 5))
+            f20, l20 = mean(v[:w]), mean(v[-w:])
             delta = 100 * (l20 - f20) / f20 if f20 else float("nan")
             print(f" {k:22s} {run:22s} {f20:>10.4f} {l20:>10.4f} "
                   f"{delta:>8.1f}% {min(v):>10.4f}")

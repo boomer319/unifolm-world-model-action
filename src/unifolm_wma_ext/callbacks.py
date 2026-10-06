@@ -67,12 +67,15 @@ class RunRecorder(pl.Callback):
         self.base_ckpt = base_ckpt
         self.dataset_name = dataset_name
         self.tag = tag
-        self._rows = []
         self._last_metrics = {}
         self._keys = None
-        self._fh = None
+        self._fh = None            # metrics.csv, one row per weight update
         self._writer = None
+        self._tfh = None           # timing.csv, one row per batch
+        self._twriter = None
         self._t0 = None
+        self._updates = 0
+        self._batches = 0
 
     # ------------------------------------------------------------------ setup
     def _base_ckpt(self, trainer):
@@ -202,7 +205,12 @@ class RunRecorder(pl.Callback):
             json.dump(manifest, f, indent=2)
         self._fh = open(os.path.join(self.run_dir, "metrics.csv"), "w", newline="")
         self._writer = csv.writer(self._fh)
+        self._tfh = open(os.path.join(self.run_dir, "timing.csv"), "w", newline="")
+        self._twriter = csv.writer(self._tfh)
+        self._twriter.writerow(["batch", "global_step", "epoch", "batches_in_window",
+                                "wall_s", "peak_GiB", "loss_total"])
         self._fh.flush()
+        self._tfh.flush()
         print(f">>> RunRecorder: writing to {self.run_dir}")
 
     # ------------------------------------------------------------- per batch
@@ -223,28 +231,50 @@ class RunRecorder(pl.Callback):
         return out
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        """Per-BATCH timing only.
+
+        The logged metrics are deliberately NOT read here: with
+        accumulate_grad_batches > 1, trainer.callback_metrics is still EMPTY in
+        on_train_batch_end (PL populates it at the optimizer step), and
+        `outputs` only carries training_step's scalar total. Reading either here
+        produced a metrics.csv with no metric columns at all. Metrics are written
+        once per weight update in on_before_optimizer_step instead.
+        """
+        if self._tfh is None:
+            return
+        total = None
+        m = self._numeric(outputs if hasattr(outputs, "items") else None)
+        if m:
+            total = m.get("loss", next(iter(m.values())))
+        self._batches += 1
+        self._twriter.writerow([
+            batch_idx, trainer.global_step, trainer.current_epoch,
+            self._batches, round(time.time() - self._t0, 2),
+            round(torch.cuda.max_memory_allocated() / 2**30, 3)
+            if torch.cuda.is_available() else "",
+            "" if total is None else round(total, 6),
+        ])
+        self._tfh.flush()
+
+    def on_before_optimizer_step(self, trainer, pl_module, optimizer):
+        """One metrics row per WEIGHT UPDATE - the useful x-axis for a curve."""
         if self._writer is None:
             return
-        # With accumulate_grad_batches > 1, trainer.callback_metrics is still
-        # EMPTY in on_train_batch_end: PL only populates it after the optimizer
-        # step. The values for THIS batch are in `outputs`, which is the dict
-        # training_step returned and where self.log() accumulates. Read both and
-        # prefer whichever is non-empty, otherwise the CSV has no metric columns
-        # at all (which is exactly what the first two verification runs produced).
-        m = self._numeric(outputs if hasattr(outputs, "items") else None)
-        if not m:
-            m = self._numeric(getattr(trainer, "callback_metrics", None))
+        m = self._numeric(getattr(trainer, "callback_metrics", None))
         if not m:
             m = self._last_metrics
         if m:
             self._last_metrics = m
-        # The first batch that actually carries metrics fixes the column order.
         if self._keys is None and m:
             self._keys = sorted(m)
-            self._writer.writerow(["batch", "global_step", "epoch", "wall_s",
-                                   "peak_GiB"] + ["m_" + k for k in self._keys])
-        row = [batch_idx, trainer.global_step, trainer.current_epoch,
-               round(time.time() - self._t0, 2),
+            self._writer.writerow(["update", "global_step", "epoch",
+                                   "batches_in_window", "wall_s", "peak_GiB"]
+                                  + ["m_" + k for k in self._keys])
+        self._updates += 1
+        in_window = self._batches
+        self._batches = 0
+        row = [self._updates, trainer.global_step, trainer.current_epoch,
+               in_window, round(time.time() - self._t0, 2),
                round(torch.cuda.max_memory_allocated() / 2**30, 3)
                if torch.cuda.is_available() else ""]
         row += [m.get(k, "") for k in (self._keys or [])]
@@ -262,6 +292,8 @@ class RunRecorder(pl.Callback):
             "ended_by": ended_by,
             "wall_seconds": round(time.time() - self._t0, 2) if self._t0 else None,
             "global_step": trainer.global_step,
+            "weight_updates": self._updates,
+            "batches": self._updates * trainer.accumulate_grad_batches,
             "peak_gpu_GiB": round(torch.cuda.max_memory_allocated() / 2**30, 3)
             if torch.cuda.is_available() else None,
             "seconds_per_optimizer_step": (
@@ -275,8 +307,12 @@ class RunRecorder(pl.Callback):
         }
         with open(os.path.join(self.run_dir, "summary.json"), "w") as f:
             json.dump(summary, f, indent=2)
-        if self._fh:
-            self._fh.close()
+        for fh in (self._fh, self._tfh):
+            if fh:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
 
     def on_fit_end(self, trainer, pl_module):
         self._summary(trainer, "fit_end")
