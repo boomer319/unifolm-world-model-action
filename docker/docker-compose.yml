@@ -195,6 +195,21 @@ services:
       lightning.trainer.num_nodes=1
       lightning.strategy=auto
 
+  # TensorBoard over the run directories. The RunRecorder's metrics.csv is the
+  # primary record; tensorboard reads the tfevents copy Lightning also writes and
+  # additionally exposes the per-step learning rates and the _simple/_vlb loss
+  # variants, so it is a useful cross-check rather than the source of truth.
+  #
+  # Reach it from your laptop with an SSH tunnel, because the lab network does
+  # not route external ports back to the VPN client:
+  #   ssh -L 6006:127.0.0.1:6006 astrazzeri@141.19.87.240
+  #   then open http://localhost:6006
+  wma-tensorboard:
+    <<: *wma-base
+    command: >
+      tensorboard --logdir /docker_data/runs --port 6006 --bind_all
+      --reload_interval 30 --samples_per_plugin scalars=2000
+
   # Decision-making eval server: FastAPI + uvicorn on port 8000.
   wma-server:
     <<: *wma-base
