@@ -66,21 +66,29 @@ def parse_args():
     p.add_argument("--num_episodes", type=int, default=1,
                    help="episodes to convert, 0-based from episode_000000")
     p.add_argument("--start_episode", type=int, default=0)
+    p.add_argument("--shadow_dir", default=None,
+                   help="where to build the temporary shadow LeRobot tree; "
+                        "defaults to target_dir. It must be writable and must NOT "
+                        "be inside source_dir, which is normally a read-only mount.")
     p.add_argument("--keep_shadow", action="store_true",
                    help="keep the temporary shadow tree for inspection")
     p.add_argument("--skip_verify", action="store_true")
     return p.parse_args()
 
 
-def build_shadow(source_root: Path, dataset_name: str, out_name: str,
-                 view: str, num: int, start: int) -> Path:
-    """Create a minimal LeRobot v2 tree with `num` episodes and one view."""
+def build_shadow(source_root: Path, shadow_root: Path, dataset_name: str,
+                 out_name: str, view: str, num: int, start: int) -> Path:
+    """Create a minimal LeRobot v2 tree with `num` episodes and one view.
+
+    shadow_root must be writable and separate from source_root: the source is
+    normally mounted read-only, so the tree cannot be staged next to it.
+    """
     src = source_root / dataset_name
     for rel in ("data/chunk-000", "meta", f"videos/chunk-000/{view}"):
         if not (src / rel).exists():
             raise FileNotFoundError(f"missing {src / rel}")
 
-    shadow = source_root / f".shadow_{out_name}"
+    shadow = shadow_root / f".shadow_{out_name}"
     if shadow.exists():
         shutil.rmtree(shadow)
     (shadow / out_name / "data" / "chunk-000").mkdir(parents=True)
@@ -241,8 +249,12 @@ def main():
                          f"{args.start_episode}..{args.start_episode + args.num_episodes - 1} "
                          f"but only {avail} exist")
 
-    shadow = build_shadow(source_root, args.dataset_name, args.output_name,
-                          args.view, args.num_episodes, args.start_episode)
+    shadow_root = Path(args.shadow_dir) if args.shadow_dir else target_dir
+    shadow_root.mkdir(parents=True, exist_ok=True)
+    print(f">>> shadow root: {shadow_root}")
+    shadow = build_shadow(source_root, shadow_root, args.dataset_name,
+                          args.output_name, args.view, args.num_episodes,
+                          args.start_episode)
     try:
         run_converter(shadow, args.output_name, target_dir, args.robot_name)
     finally:
