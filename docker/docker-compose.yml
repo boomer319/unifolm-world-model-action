@@ -74,6 +74,10 @@ x-wma-base: &wma-base
     - /data/docker-services/world_action_models/unifolm_wma/data:/data_wma
     # Caches (HF hub, torch hub), logs, lightning workspace.
     - /data/docker-services/world_action_models/unifolm_wma/docker_data:/docker_data
+    # Shared, thesis-facing experiment tree: replay results, figures, logs.
+    # One place holding every experiment from every model, rather than
+    # scattering them inside each project's docker_data.
+    - /data/docker-services/world_action_models/experiments:/experiments
     # LeRobot v2 datasets already on .240 (G1_Dex3_GraspSquare_Dataset_GEAR, ...).
     - /data/docker-services/world_action_models/dreamzero/datasets:/datasets:ro
     # Host driver libraries, needed because there is no nvidia runtime.
