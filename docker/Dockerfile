@@ -49,7 +49,7 @@ RUN groupadd -g "${tmp_GID}" "${USERNAME}" \
 # image instead creates its venv at runtime inside the mounted home - see
 # dreamzero_docker_env/build.sh:20-24 - which means the image alone cannot run.)
 RUN python3 -m venv "${VIRTUAL_ENV}" \
-    && pip install --upgrade "pip<25" setuptools wheel
+    && pip install --upgrade "pip<25" wheel
 
 # --- torch stack ------------------------------------------------------------
 # Upstream's own pins, verified consistent by pip's resolver:
@@ -88,10 +88,14 @@ RUN pip install \
     tqdm==4.66.5 \
     transformers==4.40.1
 
-# pytorch-lightning bumped 1.9.3 -> 1.9.5. Hard requirement: scripts/trainer.py:178
-# calls Trainer.from_argparse_args, which pytorch-lightning 2.x removed, so the
-# install must stay on the 1.x line; 1.9.5 is its last release.
-RUN pip install pytorch-lightning==1.9.5
+# pytorch-lightning 1.9.x, with setuptools pinned alongside it. Two constraints:
+#   * 1.9.5 rather than 2.x because scripts/trainer.py:178 calls
+#     Trainer.from_argparse_args, which pytorch-lightning 2.x removed; 1.9.5 is
+#     its last 1.x release.
+#   * setuptools<81 because PL 1.9.x imports pkg_resources, which recent
+#     setuptools releases no longer ship. Without this pin, importing
+#     pytorch_lightning fails with "No module named 'pkg_resources'".
+RUN pip install "setuptools<81" pytorch-lightning==1.9.5
 
 # --- dependencies upstream OMITS from pyproject.toml but the code imports ----
 #   h5py         src/unifolm_wma/data/wma_data.py:5, prepare_data/*.py

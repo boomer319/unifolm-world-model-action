@@ -79,13 +79,16 @@ python - <<'PY'
 import importlib, sys, traceback
 
 # pytorch-lightning must stay on the 1.x line: scripts/trainer.py:178 calls
-# Trainer.from_argparse_args, which 2.x removed.
+# Trainer.from_argparse_args, which 2.x removed. It also imports pkg_resources,
+# so setuptools must still provide it (hence the setuptools<81 pin).
 try:
+    import pkg_resources
     import pytorch_lightning as pl
     assert hasattr(pl.Trainer, "from_argparse_args"), "Trainer.from_argparse_args missing"
-    print(f"OK   pytorch_lightning {pl.__version__} keeps Trainer.from_argparse_args (1.x API)")
+    print(f"OK   pytorch_lightning {pl.__version__} keeps Trainer.from_argparse_args "
+          f"(1.x API), pkg_resources present")
 except Exception:
-    print("FAIL pytorch_lightning 1.x API requirement")
+    print("FAIL pytorch_lightning 1.x API / pkg_resources requirement")
     traceback.print_exc(limit=2)
     sys.exit(1)
 
