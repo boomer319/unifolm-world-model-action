@@ -80,6 +80,27 @@ def _lm_init(self, *a, **k):
 
 _D.LatentVisualDiffusion.__init__ = _lm_init
 
+# Finally, report what the DDIM sampler hands back, and what it built its action
+# noise from. The de-normaliser receives (16, 2): 16 is the horizon, so the last
+# axis is wrong. This separates "the sampler produced the wrong shape" from "the
+# server indexed it wrongly".
+import unifolm_wma.models.samplers.ddim as _DDIM
+
+_orig_sample = _DDIM.DDIMSampler.sample
+
+
+def _sample(self, *a, **k):
+    out = _orig_sample(self, *a, **k)
+    print("[DDIM] model type            =", type(self.model).__name__, flush=True)
+    print("[DDIM] model.agent_action_dim =",
+          getattr(self.model, "agent_action_dim", "MISSING"), flush=True)
+    for i, o in enumerate(out[:3]):
+        print(f"[DDIM] returned[{i}] shape = {tuple(o.shape)}", flush=True)
+    return out
+
+
+_DDIM.DDIMSampler.sample = _sample
+
 if __name__ == "__main__":
     print("[DEBUG] Unnormalize traced; running scripts/evaluation/real_eval_server.py",
           flush=True)
