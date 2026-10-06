@@ -1,0 +1,27 @@
+# Only pyproject.toml and src/ are COPYed into the image, so keep the build
+# context tiny: the repo carries ~120 MB of demo gifs/pngs (assets/, examples/)
+# and ~100 MB of robot meshes (unitree_deploy/), none of which the image needs.
+.git
+.gitignore
+.github
+assets
+examples
+unitree_deploy
+external
+configs
+prepare_data
+scripts
+docker
+data
+checkpoints
+docker_data
+logs
+*.md
+*.png
+*.jpg
+*.gif
+*.ckpt
+*.safetensors
+*.mp4
+__pycache__
+*.pyc
