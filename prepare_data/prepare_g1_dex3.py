@@ -72,8 +72,32 @@ def parse_args():
                         "be inside source_dir, which is normally a read-only mount.")
     p.add_argument("--keep_shadow", action="store_true",
                    help="keep the temporary shadow tree for inspection")
+    p.add_argument("--no_clean", action="store_true",
+                   help="do not remove a previous output for this --output_name; "
+                        "the stock converter's ffmpeg call has no -y, so it will "
+                        "abort on an existing video file")
     p.add_argument("--skip_verify", action="store_true")
     return p.parse_args()
+
+
+def clean_previous_output(target_dir: Path, out_name: str) -> None:
+    """Make conversion idempotent for one dataset name.
+
+    prepare_training_data.py's convert_to_h264 calls ffmpeg without -y, so a
+    leftover file from an aborted run makes the converter exit non-zero. A
+    partially converted dataset is worse than none (CSV rows, h5 files and stats
+    must agree), so the previous output for this exact name is removed first.
+    """
+    victims = [target_dir / "videos" / out_name,
+               target_dir / "transitions" / out_name,
+               target_dir / f"{out_name}.csv"]
+    found = [v for v in victims if v.exists()]
+    if not found:
+        return
+    print(f">>> removing previous output for '{out_name}':")
+    for v in found:
+        print(f"    {v}")
+        shutil.rmtree(v) if v.is_dir() else v.unlink()
 
 
 def build_shadow(source_root: Path, shadow_root: Path, dataset_name: str,
@@ -252,6 +276,8 @@ def main():
     shadow_root = Path(args.shadow_dir) if args.shadow_dir else target_dir
     shadow_root.mkdir(parents=True, exist_ok=True)
     print(f">>> shadow root: {shadow_root}")
+    if not args.no_clean:
+        clean_previous_output(target_dir, args.output_name)
     shadow = build_shadow(source_root, shadow_root, args.dataset_name,
                           args.output_name, args.view, args.num_episodes,
                           args.start_episode)
