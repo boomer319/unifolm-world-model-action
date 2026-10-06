@@ -44,6 +44,10 @@ x-wma-base: &wma-base
     HOME: /home/${USERNAME:-user}
     VIRTUAL_ENV: /opt/wma
     PATH: /opt/wma/bin:${PATH}
+    # unifolm_wma_ext is our own package added after the image was built; the
+    # editable install's package map may not know it, so src/ is on PYTHONPATH
+    # explicitly. /workspace is a bind mount, so no rebuild is needed for edits.
+    PYTHONPATH: /workspace/src
     LD_LIBRARY_PATH: /nvidia-host
     PYTHONUNBUFFERED: "1"
     HF_HOME: /docker_data/cache/huggingface
@@ -132,6 +136,43 @@ services:
       lightning.strategy=auto
       lightning.trainer.max_steps=100
       lightning.callbacks.model_checkpoint.params.every_n_train_steps=100
+
+  # --- 100-step verification runs (one per base checkpoint) ------------------
+  # Both write a thesis-grade record to /docker_data/runs/<name>/ via the
+  # RunRecorder callback: manifest.json (git SHA, config hash, dataset hashes,
+  # checkpoint identity, GPU, versions), metrics.csv, summary.json.
+  wma-verify-base:
+    <<: *wma-base
+    command: >
+      python scripts/trainer.py --train
+      --base configs/train/config_g1_dex3.yaml
+      --name verify_base
+      --logdir /docker_data/runs
+      --devices 1
+      --total_gpus=1
+      lightning.trainer.num_nodes=1
+      lightning.strategy=auto
+      lightning.trainer.max_steps=100
+      lightning.callbacks.model_checkpoint.params.every_n_train_steps=100
+
+  # Base has no action_unet/state_unet (it is the README's Step 1, world model
+  # only), so the stock loader loads it with strict=False and no shape error.
+  # Dual matches the code exactly but needs prepare_ckpt.py first, because
+  # upstream load_checkpoints raises on the 68 DoF-shaped tensors.
+  wma-verify-dual:
+    <<: *wma-base
+    command: >
+      python scripts/trainer.py --train
+      --base configs/train/config_g1_dex3.yaml
+      --name verify_dual
+      --logdir /docker_data/runs
+      --devices 1
+      --total_gpus=1
+      lightning.trainer.num_nodes=1
+      lightning.strategy=auto
+      lightning.trainer.max_steps=100
+      lightning.callbacks.model_checkpoint.params.every_n_train_steps=100
+      model.pretrained_checkpoint=checkpoints/unifolm_wma_dual_28dof_init.ckpt
 
   # Real fine-tuning run (Phase 1: 1-episode overfit).
   wma-train:

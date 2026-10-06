@@ -304,6 +304,19 @@ lightning:
     gradient_clip_val: 0.5
     enable_model_summary: False
   callbacks:
+    # Thesis provenance: per-run manifest.json (git SHA, resolved config hash,
+    # dataset file hashes, base checkpoint identity, GPU, versions, parameter
+    # counts), metrics.csv at optimizer-step resolution, and summary.json with
+    # timing and peak memory. Lives in our own package so upstream src/ is
+    # untouched.
+    run_recorder:
+      target: unifolm_wma_ext.callbacks.RunRecorder
+      params:
+        out_dir: /docker_data/runs
+        config: /workspace/configs/train/config_g1_dex3.yaml
+        data_dir: /data_wma
+        base_ckpt: ${model.pretrained_checkpoint}
+        dataset_name: g1_dex3_graspsquare_1ep
     model_checkpoint:
       target: pytorch_lightning.callbacks.ModelCheckpoint
       params:

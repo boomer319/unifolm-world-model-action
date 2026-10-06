@@ -109,6 +109,7 @@ targets = [
     ("unifolm_wma.models.diffusion_head.vision.multi_image_obs_encoder",
      "MultiImageObsEncoder"),
     ("unifolm_wma.models.ddpms",            "LatentVisualDiffusion (full closure)"),
+    ("unifolm_wma_ext.callbacks",           "our RunRecorder callback (G1 Dex3)"),
 ]
 
 bad = 0
