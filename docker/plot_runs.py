@@ -54,32 +54,41 @@ def parse_args():
     p.add_argument("--keys", nargs="*",
                    default=["loss_action_step", "loss_state_step", "loss_step"])
     p.add_argument("--title", default="UnifoLM-WMA 1-episode G1 Dex3 overfit")
-    p.add_argument("--smooth", type=int, default=25,
-                   help="rolling-mean window for readability (0 = raw)")
+    p.add_argument("--bin", type=int, default=200,
+                   help="bin size in updates; the per-update loss is far too "
+                        "noisy to plot raw or with a short moving average")
     p.add_argument("--table", action="store_true", help="also print a text table")
-    p.add_argument("--linear", action="store_true",
-                   help="linear y-axis. The default is log, because the loss "
-                        "drops ~20x in the first 50 updates and a linear axis "
-                        "then compresses everything afterwards into a flat line "
-                        "- which reads as 'plateaued' when it is still falling")
+    p.add_argument("--logy", action="store_true", help="log y-axis")
     p.add_argument("--skip", type=int, default=0,
                    help="skip the first N updates (e.g. 50 to hide warmup)")
     return p.parse_args()
 
 
-def smooth(xs, ys, n):
-    if n <= 1 or len(ys) < n:
-        return xs, ys
-    out, acc = [], []
-    s = 0.0
-    for i, y in enumerate(ys):
-        s += y
-        acc.append(s)
-        if i >= n:
-            s -= ys[i - n]
-        out.append((acc[-1] - (acc[-n - 1] if len(acc) > n else 0.0)) /
-                   (n if len(acc) > n else len(acc)))
-    return xs, out
+def binned(xs, ys, n):
+    """Mean per bin of n updates.
+
+    Every update draws a random diffusion timestep AND random noise, so the
+    per-update loss has enormous variance: a 25-step moving average still swings
+    between -0.2 and +0.2 and can even cross zero. Binning ~200 samples averages
+    that down and shows the actual trend. Returns (bin_centres, bin_means).
+    """
+    pairs = [(x, y) for x, y in zip(xs, ys) if y == y]
+    if not pairs:
+        return [], []
+    pairs.sort()
+    out_x, out_y = [], []
+    cur, acc = [], []
+    for x, y in pairs:
+        cur.append(x)
+        acc.append(y)
+        if len(cur) == n:
+            out_x.append(sum(cur) / n)
+            out_y.append(sum(acc) / len(acc))
+            cur, acc = [], []
+    if cur:
+        out_x.append(sum(cur) / len(cur))
+        out_y.append(sum(acc) / len(acc))
+    return out_x, out_y
 
 
 def main():
@@ -122,17 +131,18 @@ def main():
         for i, (r, (s, _)) in enumerate(sorted(data.items())):
             xs = [row[0] for row in s if row[0] >= a.skip]
             ys = [row[2].get(k, float("nan")) for row in s if row[0] >= a.skip]
-            xs2, ys2 = smooth(xs, ys, a.smooth)
-            ax.plot(xs2, ys2, color=colours[i % 10], lw=1.6,
-                    label=f"{r}  (final {ys[-1]:.4f})")
+            xs2, ys2 = binned(xs, ys, a.bin)
+            ax.plot(xs2, ys2, color=colours[i % 10], lw=1.8, marker="o",
+                    ms=2.5, label=f"{r}  (last bin {ys2[-1]:.4f})")
+        if a.logy:
+            ax.set_yscale("log")
         ax.set_title(k.replace("loss_", "").replace("_step", ""))
         ax.set_xlabel("weight update")
         ax.grid(alpha=0.25)
         if j == 0:
             ax.set_ylabel("loss")
         ax.legend(fontsize=7.5, frameon=False)
-    ttl = a.title + (f"   ({a.smooth}-step moving average)" if a.smooth > 1 else "")
-    ttl += "   [log y]" if not a.linear else "   [linear y]"
+    ttl = a.title + f"   (mean per {a.bin} updates)"
     if a.skip:
         ttl += f"   [first {a.skip} updates hidden]"
     fig.suptitle(ttl)
