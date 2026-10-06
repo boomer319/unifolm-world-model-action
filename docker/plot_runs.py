@@ -57,6 +57,13 @@ def parse_args():
     p.add_argument("--smooth", type=int, default=25,
                    help="rolling-mean window for readability (0 = raw)")
     p.add_argument("--table", action="store_true", help="also print a text table")
+    p.add_argument("--linear", action="store_true",
+                   help="linear y-axis. The default is log, because the loss "
+                        "drops ~20x in the first 50 updates and a linear axis "
+                        "then compresses everything afterwards into a flat line "
+                        "- which reads as 'plateaued' when it is still falling")
+    p.add_argument("--skip", type=int, default=0,
+                   help="skip the first N updates (e.g. 50 to hide warmup)")
     return p.parse_args()
 
 
@@ -113,8 +120,8 @@ def main():
     for j, k in enumerate(a.keys):
         ax = axes[0][j]
         for i, (r, (s, _)) in enumerate(sorted(data.items())):
-            xs = [row[0] for row in s]
-            ys = [row[2].get(k, float("nan")) for row in s]
+            xs = [row[0] for row in s if row[0] >= a.skip]
+            ys = [row[2].get(k, float("nan")) for row in s if row[0] >= a.skip]
             xs2, ys2 = smooth(xs, ys, a.smooth)
             ax.plot(xs2, ys2, color=colours[i % 10], lw=1.6,
                     label=f"{r}  (final {ys[-1]:.4f})")
@@ -124,8 +131,11 @@ def main():
         if j == 0:
             ax.set_ylabel("loss")
         ax.legend(fontsize=7.5, frameon=False)
-    fig.suptitle(a.title + (f"   ({a.smooth}-step moving average)"
-                            if a.smooth > 1 else ""))
+    ttl = a.title + (f"   ({a.smooth}-step moving average)" if a.smooth > 1 else "")
+    ttl += "   [log y]" if not a.linear else "   [linear y]"
+    if a.skip:
+        ttl += f"   [first {a.skip} updates hidden]"
+    fig.suptitle(ttl)
     fig.tight_layout()
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     fig.savefig(a.out, dpi=110)
