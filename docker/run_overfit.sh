@@ -2,7 +2,7 @@
 # Launch one G1 Dex3 overfit run on a single GPU.
 #
 # Usage:
-#   ./run_overfit.sh <gpu> <run_name> <ckpt_relpath> [seed] [max_steps] [ckpt_every]
+#   ./run_overfit.sh <gpu> <run_name> <ckpt_relpath> [seed] [max_steps] [ckpt_every] [config]
 #
 # Example (Dual base, 28-DoF-initialised checkpoint):
 #   ./run_overfit.sh 0 overfit_dual_s20250912 checkpoints/unifolm_wma_dual_28dof_init.ckpt
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 if [ $# -lt 3 ]; then
-    echo "Usage: $0 <gpu> <run_name> <ckpt_relpath> [seed] [max_steps] [ckpt_every]" >&2
+    echo "Usage: $0 <gpu> <run_name> <ckpt_relpath> [seed] [max_steps] [ckpt_every] [config]" >&2
     exit 2
 fi
 
@@ -29,6 +29,7 @@ CKPT=$3
 SEED=${4:-20250912}
 STEPS=${5:-10000}
 EVERY=${6:-1000}
+CONFIG=${7:-configs/train/config_g1_dex3.yaml}
 
 cd "$(dirname "$0")"
 
@@ -41,6 +42,7 @@ echo "    checkpoint : $CKPT"
 echo "    seed       : $SEED"
 echo "    max_steps  : $STEPS (batches == weight updates here)"
 echo "    ckpt every : $EVERY  (~$((STEPS / EVERY * 16)) GB)"
+echo "    config     : $CONFIG"
 echo "    log        : ../docker_data/logs/$NAME.log"
 
 # -e WITHOUT a value forwards the exported host variable into the container.
@@ -49,7 +51,7 @@ echo "    log        : ../docker_data/logs/$NAME.log"
 # the same runs/tensorboard directory and overwrote each other's CSVs.
 exec docker compose run --rm -e WMA_RUN_NAME -e WMA_BASE_CKPT wma-shell \
     python scripts/trainer.py --train \
-        --base configs/train/config_g1_dex3.yaml \
+        --base "$CONFIG" \
         --name "$NAME" \
         --logdir /docker_data/runs \
         --seed "$SEED" \
