@@ -110,8 +110,17 @@ def main():
     print(f"instruction  {instruction!r}")
     print(f"h5 attrs     {attrs}")
 
-    payload = {"image": image, "state": state,
-               "zeros": np.zeros((16, state.shape[0]), dtype=np.float32),
+    # The placeholder action must be the full (horizon, DoF) chunk. Note state
+    # is (n_obs_steps, DoF), so the DoF is the LAST axis: using state.shape[0]
+    # silently sent (16, 2) - the observation count - and the server then padded
+    # it to (16, 28) with a 2-entry mask, ran the rollout happily, and only
+    # failed at the very end when it indexed the result with that mask:
+    #   normolize.py:227 "tensor a (2) must match tensor b (28)"
+    # So the shape was wrong at the payload boundary, not in the model.
+    horizon, dof = 16, state.shape[-1]
+    zeros = np.zeros((horizon, dof), dtype=np.float32)
+    assert zeros.shape == (16, 28), f"placeholder action must be (16, 28), got {zeros.shape}"
+    payload = {"image": image, "state": state, "zeros": zeros,
                "instruction": instruction}
 
     results = []
