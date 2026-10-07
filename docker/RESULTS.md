@@ -92,7 +92,7 @@ far more when handed the answer.
 ## 5. It is under-trained, not at a structural floor
 
 Resuming the best arms from their step-9 000 checkpoints for a second
-learning-rate cycle (≈19 000 total updates) reaches **1.11** and **1.12** in the
+learning-rate cycle (≈19 000 total updates) reaches **1.10** and **1.11** in the
 two seeds — agreement that makes it a real effect rather than the seed noise we
 measured at ~0.6 in this ratio. It also improves the video branch (PSNR 24–27 dB
 versus 23–24 for the original arms).
@@ -111,8 +111,9 @@ from Unitree's recipe, not part of it**. At *matched* 10 000 updates:
 
 | | seed 20250912 | seed 42 |
 |---|---|---|
-| n_obs = 2 (original) | 1.95 | 2.18 |
-| n_obs = 4 | **1.36** | 1.60 |
+| n_obs = 2 (original, 10 k) | 1.95 | 2.18 |
+| n_obs = 4 (10 k) | **1.36** | **1.55** |
+| n_obs = 4 (best, 12 k) | 1.36 | **1.25** |
 
 So roughly a 30 % improvement from observation context alone, in both seeds. The
 early steps showed a much larger apparent lead (3.61 vs 5.87 at step 2 000) that
@@ -151,7 +152,12 @@ instead of 10 000. Genuine diversity needs the other AllMerged tasks
 - Arms are compared at different total update counts (10 k original, 12 k for
   obs4, 19 k for the continuations). Only the within-budget comparisons in §6 are
   matched.
-- The best ratio anywhere in the study is 1.11. "Better than standing still" was
+- The best ratio anywhere in the study is 1.10. "Better than standing still" was
   not reached; the honest claim is that it came close.
+- Both levers show an overfitting regime: the continuation arms peak mid-run and
+  then degrade (1.11 at 19 000 total, then 1.34 by 21 000), and obs4 does the same
+  (1.36 at 10 000, then 1.99 at 12 000). There is a real optimum within roughly
+  10 000–20 000 updates on a single episode, and simply running longer is not a
+  monotone route to better tracking.
 - No simulation or hardware deployment was attempted; these are offline
   evaluations against recorded ground truth.
