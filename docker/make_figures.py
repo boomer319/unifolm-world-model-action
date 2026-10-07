@@ -178,25 +178,36 @@ def main():
                       xy=(0.55, 0.86), xycoords="axes fraction", fontsize=8)
 
     # ---- 4. teacher forcing -------------------------------------------
-    tf_runs = sorted(glob.glob(os.path.join(a.exp, "replay", "_tf_*", "summary.json")))
+    # Three bars, not two. There are TWO distinct interventions and they do
+    # different things: tf_* substitutes the head's raw observation-frame
+    # pathway and changes nothing, tfz_* substitutes the video branch so the
+    # world-model features derive from ground truth and helps 10-21%. Plotting
+    # only tf_* made the panel contradict the headline result - which is exactly
+    # what looking at the rendered figure caught.
+    tf_runs = sorted(glob.glob(os.path.join(a.exp, "replay", "_tf*", "summary.json")))
     if tf_runs:
-        labels, ratios, tf_ratios = [], [], []
+        labels, ratios, tf_ratios, tfz_ratios = [], [], [], []
         for f in tf_runs:
             ag = json.load(open(f))["aggregate"]
-            name = os.path.basename(os.path.dirname(f)).lstrip("_tf_")
-            labels.append(name)
+            if "tfz_ratio_vs_baseline" not in ag:
+                continue      # partial-only run: nothing to show here
+            labels.append(os.path.basename(os.path.dirname(f))
+                          .replace("complete", "").replace("2_", "").strip("_"))
             ratios.append(ag.get("ratio_vs_baseline", np.nan))
             tf_ratios.append(ag.get("tf_ratio_vs_baseline", np.nan))
+            tfz_ratios.append(ag.get("tfz_ratio_vs_baseline", np.nan))
         i = np.arange(len(labels))
-        ax_tf.bar(i - 0.2, ratios, 0.4, label="normal", color=BASELINE_COLOUR)
-        ax_tf.bar(i + 0.2, tf_ratios, 0.4, label="teacher forced",
-                  color="#2ca02c")
+        ax_tf.bar(i - 0.27, ratios, 0.26, label="normal", color=BASELINE_COLOUR)
+        ax_tf.bar(i, tf_ratios, 0.26,
+                  label="TF: raw-frame pathway", color="#ff7f0e")
+        ax_tf.bar(i + 0.27, tfz_ratios, 0.26,
+                  label="TF: world-model pathway", color="#2ca02c")
         ax_tf.axhline(1.0, color="k", ls="--", lw=1.2)
         ax_tf.set_xticks(i)
-        ax_tf.set_xticklabels(labels, rotation=25, ha="right", fontsize=7)
+        ax_tf.set_xticklabels(labels, rotation=20, ha="right", fontsize=7)
         ax_tf.set_ylabel("MAE / no-motion MAE")
-        ax_tf.set_title("4. Teacher forcing (lower is better)")
-        ax_tf.legend(fontsize=8)
+        ax_tf.set_title("4. Teacher forcing: only the world-model pathway helps")
+        ax_tf.legend(fontsize=7)
         ax_tf.grid(alpha=0.3, axis="y")
 
     fig.tight_layout()
