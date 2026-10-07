@@ -25,7 +25,7 @@ Inference settings match Unitree's own recommended deployment command
 --control_freq 15`), so the negative result is obtained under the vendor's
 configuration rather than one of our own devising.
 
-## 2. The main result: substantial learning, no memorisation
+## 2. The main result: substantial learning, memorisation only just reachable
 
 Ratio = MAE divided by the MAE of a predictor that simply repeats the current
 joint position. **Below 1.0 means better than doing nothing.**
@@ -38,11 +38,11 @@ joint position. **Below 1.0 means better than doing nothing.**
 | `overfit_dual_s20250912` | 8 000 | 2.24 | 12.0× |
 | `overfit_dual_s42` | 10 000 | 2.40 | 10.3× |
 
-A 9–12× improvement over the untrained head, yet **every arm is still worse than
-standing still.** The trajectory was never reproduced.
-
-Ground truth moves 0.0091 rad per step at this stride, so `delta_ratio` near 1
-would mean the emitted motion has the right magnitude. Nothing gets below 8×.
+A 9–12× improvement over the untrained head, yet at this budget **every arm is
+still worse than standing still.** Ground truth moves 0.0091 rad per step at this
+stride, so `delta_ratio` near 1 would mean the emitted motion has the right
+magnitude; nothing here gets below 8×. (A later second learning-rate cycle does
+cross the baseline — see §5.)
 
 ## 3. The world model works; the action head does not
 
@@ -101,8 +101,23 @@ The trend *within* a continuation is not monotonic, so the minimum over a run
 matters more than its endpoint.
 
 So the original study's conclusion must be stated as **"10 000 updates is not
-enough"**, not "it cannot be done". Even so, no checkpoint in the entire study
-crossed 1.0, so **memorisation is still not demonstrated**.
+enough"**, not "it cannot be done".
+
+At 22 000 total updates the first seed **does** cross the line: ratio **0.979**
+(MAE 0.0360 against a no-motion baseline of 0.0550), correlation +0.990, emitted
+motion still 5.2× ground truth. Taken alone that is the first evidence of
+single-episode memorisation in this study — but it should be read with three
+qualifications, and it would be wrong to announce it as a clean success:
+
+- it is **marginal** — 0.979 is a 2 % margin, not a decisive separation;
+- it is **not replicated** — the second continuation seed bottoms out at 1.11;
+- it is **uneven across the episode** — 5 of 8 anchors individually beat the
+  do-nothing baseline, with a per-anchor median of 0.996 but a maximum of 2.06.
+
+So the accurate claim is that **single-episode memorisation becomes reachable with
+roughly twice the compute we first gave it, in one of two seeds**. Whether it is
+reliably reachable is exactly what a longer run with periodic evaluation and an
+early-stopping criterion would settle.
 
 ## 6. Observation context helps too — separably from training longer
 
