@@ -91,29 +91,44 @@ far more when handed the answer.
 
 ## 5. It is under-trained, not at a structural floor
 
-Resuming the best arm from its step-9 000 checkpoint for a second learning-rate
-cycle reaches **1.30** — better than any checkpoint of the original 10 000-update
-run (best 1.68) — and also improves the video branch (PSNR ~25.9 dB). The trend
-within the continuation is not monotonic (1.30 / 2.71 / 1.51 at steps 1 000–3 000),
-so the minimum over a run matters more than its endpoint.
+Resuming the best arms from their step-9 000 checkpoints for a second
+learning-rate cycle (≈19 000 total updates) reaches **1.11** and **1.12** in the
+two seeds — agreement that makes it a real effect rather than the seed noise we
+measured at ~0.6 in this ratio. It also improves the video branch (PSNR 24–27 dB
+versus 23–24 for the original arms).
+
+The trend *within* a continuation is not monotonic, so the minimum over a run
+matters more than its endpoint.
 
 So the original study's conclusion must be stated as **"10 000 updates is not
-enough"**, not "it cannot be done".
+enough"**, not "it cannot be done". Even so, no checkpoint in the entire study
+crossed 1.0, so **memorisation is still not demonstrated**.
 
-## 6. Observation context helps, modestly
+## 6. Observation context helps too — separably from training longer
 
-Doubling the observation horizon from 2 to 4 frames — a **diagnostic departure
-from Unitree's recipe, not part of it** — is ahead in both seeds at matched
-steps:
+Doubling the observation horizon from 2 to 4 frames is a **diagnostic departure
+from Unitree's recipe, not part of it**. At *matched* 10 000 updates:
 
-| step | n_obs=2 | n_obs=4 (seed 20250912) | n_obs=4 (seed 42) |
-|---|---|---|---|
-| 1 000 | 6.13 | 6.18 | 6.47 |
-| 2 000 | 5.87 | **3.61** | 5.13 |
-| 3 000 | 3.96 | **3.02** | 3.77 |
+| | seed 20250912 | seed 42 |
+|---|---|---|
+| n_obs = 2 (original) | 1.95 | 2.18 |
+| n_obs = 4 | **1.36** | 1.60 |
 
-The direction agrees across seeds, but the effect is far smaller than simply
-training longer, and neither arm is close to 1.0.
+So roughly a 30 % improvement from observation context alone, in both seeds. The
+early steps showed a much larger apparent lead (3.61 vs 5.87 at step 2 000) that
+narrowed as the n_obs = 2 arm caught up — a reminder not to read a trend off
+early checkpoints, which is the same mistake that produced the incorrect
+"all arms peak at step 9000" claim.
+
+Both levers are real and independent: **training longer** (10 k → 19 k: 1.95 →
+1.11) is the larger of the two, **more observation context** (2 → 4 frames at
+10 k: 1.95 → 1.36) is a genuine but smaller gain.
+
+## 6b. And more trajectory data does nothing
+
+The 10-episode arm is indistinguishable from the 1-episode arm at matched steps
+(2.96 vs 3.11 at step 4 000; 2.53 vs 2.69 at step 6 000). Ten times the windows,
+each seen ten times fewer, buys nothing at fixed compute.
 
 ## 7. What the 10-episode arm does and does not test
 
@@ -133,5 +148,10 @@ instead of 10 000. Genuine diversity needs the other AllMerged tasks
 - The original four arms stopped at 10 000 updates while still improving, so
   their ranking (Base > Dual, consistent across both seeds) should be read as a
   ranking *at that budget*, not a property of the architectures.
+- Arms are compared at different total update counts (10 k original, 12 k for
+  obs4, 19 k for the continuations). Only the within-budget comparisons in §6 are
+  matched.
+- The best ratio anywhere in the study is 1.11. "Better than standing still" was
+  not reached; the honest claim is that it came close.
 - No simulation or hardware deployment was attempted; these are offline
   evaluations against recorded ground truth.
