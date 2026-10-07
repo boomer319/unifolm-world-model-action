@@ -481,9 +481,14 @@ def main():
               "video_psnr", "video_mae_px",
               "tf_mae", "tf_ratio_vs_baseline", "tf_delta_pred", "tf_corr",
               "tfz_mae", "tfz_ratio_vs_baseline", "tfz_delta_pred", "tfz_corr"):
-        vals = [m[k] for m in per_anchor if not np.isnan(m[k])]
-        agg[k] = float(np.mean(vals)) if vals else float("nan")
-        agg[k + "_std"] = float(np.std(vals)) if vals else float("nan")
+        # Skip metrics this run did not produce. The teacher-forcing keys only
+        # exist when the flags are set, and indexing them unconditionally raised
+        # KeyError at the very end - after all the inference was already done.
+        vals = [m[k] for m in per_anchor if k in m and not np.isnan(m[k])]
+        if not vals:
+            continue
+        agg[k] = float(np.mean(vals))
+        agg[k + "_std"] = float(np.std(vals))
 
     summary = {
         "checkpoint": a.ckpt,
