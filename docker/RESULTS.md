@@ -4,8 +4,17 @@ All numbers below are ground-truth-anchored replay evaluations, measured on
 `.240`, reproducible from the artefacts in this tree. Metric definitions and the
 reasoning behind each choice are in `EXPERIMENTS.md`.
 
+> **CORRECTION (2026-10-07, statistical test R3).** An earlier draft of this
+> document reported a "first crossing below the do-nothing baseline" at ratio
+> 0.979. A paired sign test and bootstrap over that evaluation's 8 anchors give
+> **95 % CI [0.580, 1.407], p = 0.727** — the interval contains 1.0. **No crossing
+> occurred.** That 0.979 is the minimum of an oscillatory sequence, and the minimum
+> of a noisy sequence is exactly where selection bias manufactures apparent success.
+> The same test applied to the arm ordering shows the arm-to-arm claims are **not
+> established either**. Full analysis: `doc/wma/research/R3.md`.
+
 **The short version.** On a single 39 s episode, UnifoLM-WMA learns a great deal
-about the *scene* and rather little about the *trajectory*. The world-model
+about the *scene* and does not reach parity with "do nothing" on the *trajectory*. The world-model
 branch reproduces the manipulation faithfully; the action head never becomes
 better than the trivial "do nothing" predictor within the budget tested. Teacher
 forcing localises the failure to the action head's conditioning rather than to
@@ -167,8 +176,12 @@ instead of 10 000. Genuine diversity needs the other AllMerged tasks
 - Arms are compared at different total update counts (10 k original, 12 k for
   obs4, 19 k for the continuations). Only the within-budget comparisons in §6 are
   matched.
-- The best ratio anywhere in the study is 1.10. "Better than standing still" was
-  not reached; the honest claim is that it came close.
+- **The best ratio anywhere is not statistically separable from 1.0** (CI
+  [0.580, 1.407], p = 0.727, 8 anchors). "Better than standing still" was not
+  demonstrated. The arm ordering is likewise untested — see `doc/wma/research/R3.md`.
+- At 8 anchors per evaluation, **no claim in this document is significance-tested
+  except the video metrics**. The right test is paired across arms, since all arms
+  share anchors and ground truth; that work is queued as `doc/wma/06-tbd.md` T3.
 - Both levers show an overfitting regime: the continuation arms peak mid-run and
   then degrade (1.11 at 19 000 total, then 1.34 by 21 000), and obs4 does the same
   (1.36 at 10 000, then 1.99 at 12 000). There is a real optimum within roughly
