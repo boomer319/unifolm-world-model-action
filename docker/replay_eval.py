@@ -50,11 +50,6 @@ def parse_args():
     p.add_argument("--dataset", default="g1_dex3_graspsquare_1ep")
     p.add_argument("--view", default="observation.images.cam_left_high")
     p.add_argument("--episode", type=int, default=0,
-                   help="which episode to score. Hardcoding 0 meant every "
-                        "evaluation - including the 10-episode run's - was "
-                        "scored on episode 0, so episodes 1-9 were trained on "
-                        "and never evaluated.")
-    p.add_argument("--episode", type=int, default=0,
                    help="which episode of the dataset to score. Defaults to 0, "
                         "which silently confines every result to the episode "
                         "that was trained on - the single biggest limitation of "
