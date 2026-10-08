@@ -49,6 +49,12 @@ def parse_args():
     p.add_argument("--data-dir", default="/data_wma")
     p.add_argument("--dataset", default="g1_dex3_graspsquare_1ep")
     p.add_argument("--view", default="observation.images.cam_left_high")
+    p.add_argument("--episode", type=int, default=0,
+                   help="which episode of the dataset to score. Defaults to 0, "
+                        "which silently confines every result to the episode "
+                        "that was trained on - the single biggest limitation of "
+                        "the whole study until now. Pass e.g. --episode 42 to "
+                        "score a held-out episode.")
     p.add_argument("--anchors", type=int, default=8,
                    help="number of GT-anchored evaluation points")
     p.add_argument("--horizon", type=int, default=16)
@@ -271,7 +277,7 @@ def main():
 
     # Ground truth from the converted h5 (absolute joint targets, radians).
     import h5py
-    h5 = os.path.join(a.data_dir, "transitions", a.dataset, "0.h5")
+    h5 = os.path.join(a.data_dir, "transitions", a.dataset, f"{a.episode}.h5")
     with h5py.File(h5, "r") as f:
         gt_actions = np.array(f["action"][:], dtype=np.float32)
         gt_states = np.array(f["observation.state"][:], dtype=np.float32)
@@ -290,10 +296,12 @@ def main():
             "model has no n_obs_steps_imagen; expected LatentVisualDiffusion "
             "to expose it (it sizes agent_state_pos_emb)")
     n_obs = int(model.n_obs_steps_imagen)
-    print(f"  episode: {T} frames, observation history n_obs={n_obs}", flush=True)
+    print(f"  dataset={a.dataset} EPISODE {a.episode}: {T} frames, "
+          f"observation history n_obs={n_obs}", flush=True)
 
     from decord import VideoReader, cpu
-    vr = VideoReader(os.path.join(a.data_dir, "videos", a.dataset, a.view, "0.mp4"),
+    vr = VideoReader(os.path.join(a.data_dir, "videos", a.dataset, a.view,
+                                  f"{a.episode}.mp4"),
                      ctx=cpu(0))
 
     # Anchor points: spread over the episode. The limit is set by the VIDEO
